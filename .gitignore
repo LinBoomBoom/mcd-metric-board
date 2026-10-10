@@ -1,0 +1,39 @@
+# ===== 凭证与敏感配置 =====
+mcp-config.json
+.env
+.env.*
+*.secret
+*.token
+secrets/
+credentials/
+
+# 官方要求：配置文件仅使用环境变量占位符
+# 示例文件 mcp-config.example.json 必须提交，真实配置绝不提交
+
+# ===== 个人数据 =====
+# 我的常点榜涉及用户历史订单、积分、券数据
+# 任何真实用户数据一律不得入库
+data/
+*.user.json
+demo-data/
+sample-user/
+
+# ===== 开发环境 =====
+node_modules/
+dist/
+build/
+.next/
+.cache/
+.env.local
+
+# ===== 编辑器与系统 =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# ===== 日志 =====
+*.log
+npm-debug.log*
+yarn-error.log*

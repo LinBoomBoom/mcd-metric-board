@@ -1,0 +1,22 @@
+{
+  "name": "mcd-metric-board",
+  "version": "0.1.0",
+  "description": "麦麦参考榜 · 基于麦当劳官方 MCP 的客观指标决策榜单",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "probe": "node src/cli.js probe",
+    "protein": "node src/cli.js protein",
+    "now": "node src/cli.js now",
+    "sodium": "node src/cli.js sodium",
+    "mine": "node src/cli.js mine",
+    "board": "node src/cli.js board"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}
