@@ -4,20 +4,31 @@ import { COMPLIANCE_FOOTER, NEUTRAL_NOTE } from './compliance.js';
 /**
  * 榜单渲染层
  *
- * 设计要点（依据 design/03-交互决策清单.md）：
- *   1. 覆盖率常驻顶部，不可折叠 —— 主动披露是可信度来源
- *   2. 密度条用榜单内相对比例，不用绝对刻度 —— 否则低密度项不可见
- *   3. 无数据项独立分组，中性灰竖条，不参与色阶 —— 没有数据就没有视觉编码
- *   4. 单色阶，不用红绿 —— 红绿在中国饮食语境构成健康评判
- *   5. 每屏固定合规区
+ * 视觉体系：麦当劳品牌语言（暖色、粗字重、大圆角）
+ * 设计规范：design/04-麦当劳风格设计规范.md
+ *
+ * ## 合规边界（务必遵守）
+ * 采用品牌**视觉语言**，但不复制**商标资产**：
+ *   - 品牌标记为自建「麦」字方块，非官方 Logo
+ *   - 不使用官方字体文件（用系统字体栈 + 提高字重模拟粗壮感）
+ *   - 每屏常驻「非麦当劳官方产品」声明
+ *
+ * ## 数据编码约束
+ *   1. 品牌红只用于品牌与操作，不用于数据编码 —— 避免与语义混淆
+ *   2. 数据一律走暖棕单色阶，绝不用红绿 —— 红绿构成健康评判
+ *   3. 排名徽标仅用于蛋白密度榜；钠值榜是纯数据呈现，不加排名强调
+ *   4. 覆盖率常驻顶部，不可折叠 —— 主动披露是可信度来源
  */
 
-const SEMANTIC = {
-  success: 'var(--color-text-success)',
-  warning: 'var(--color-text-warning)',
-  neutral: 'var(--color-text-secondary)',
-  muted: 'var(--color-text-tertiary)',
-} as const;
+/** 数据色阶：暖棕单色阶（浅 → 深 = 低 → 高） */
+const DATA_SCALE = ['#F7DCA8', '#E8A93C', '#C2701A', '#8A4A12'] as const;
+
+/** 排名徽标配色：前三名庆祝式，其余中性 */
+const RANK_BADGE = [
+  { bg: 'var(--brand-red)', fg: '#FFFFFF' },
+  { bg: 'var(--brand-gold)', fg: '#241A14' },
+  { bg: '#C98A3E', fg: '#FFFFFF' },
+] as const;
 
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -27,36 +38,70 @@ function fmt(n: number, digits = 1): string {
   return n.toFixed(digits);
 }
 
+/** 按分位取数据色阶颜色 */
+function scaleColor(percentile: number): string {
+  const idx = Math.min(
+    DATA_SCALE.length - 1,
+    Math.floor((Math.max(0, Math.min(100, percentile)) / 100) * DATA_SCALE.length),
+  );
+  return DATA_SCALE[idx] ?? DATA_SCALE[0];
+}
+
+/** 品牌标记：自建「麦」字方块，非官方 Logo */
+function brandMark(): string {
+  return '<span class="brand-mark">麦</span>';
+}
+
+/** 榜单头部：品牌标记 + 标题 + 副标题 */
+function boardHead(title: string, sub: string, extra = ''): string {
+  return `
+<div class="board-head">
+  <div class="board-title-row">
+    ${brandMark()}
+    <div class="board-title-block">
+      <div class="board-title">${esc(title)}</div>
+      <div class="board-sub">${esc(sub)}</div>
+    </div>
+  </div>
+  ${extra}
+</div>`;
+}
+
 /**
  * 渲染覆盖率披露条
  *
- * 固定在列表顶部。位置显眼但不喧宾夺主。
+ * 固定在列表顶部，不可折叠。这是本项目的核心信任机制。
  */
 export function renderCoverage(matched: number, total: number): string {
   const ratio = total > 0 ? (matched / total) * 100 : 0;
   return `
 <div class="coverage">
-  <div class="coverage-text">
-    <strong>${matched}</strong> / ${total} 项有营养数据
+  <div class="coverage-row">
+    <div class="coverage-text"><strong>${matched}</strong> / ${total} 项有营养数据</div>
+    <div class="coverage-pct">${fmt(ratio, 1)}%</div>
   </div>
   <div class="coverage-bar"><div style="width:${fmt(ratio, 1)}%"></div></div>
-  <div class="coverage-pct">${fmt(ratio, 1)}%</div>
-</div>
-<div class="coverage-note">
-  官方营养表与门店实时菜单存在版本差。未匹配项标注「暂无营养数据」，不做推测映射。
+  <div class="coverage-note">
+    官方营养表与门店实时菜单存在版本差。未匹配项标注「暂无营养数据」，不做推测映射。
+  </div>
 </div>`;
+}
+
+/** 排名徽标 */
+function rankBadge(index: number): string {
+  const preset = RANK_BADGE[index];
+  if (preset) {
+    return `<span class="rank-badge" style="background:${preset.bg};color:${preset.fg}">${index + 1}</span>`;
+  }
+  return `<span class="rank-badge rank-badge--plain">${index + 1}</span>`;
 }
 
 /**
  * 渲染单条排名项
  */
-function renderRankedItem(
-  item: RankedItem,
-  index: number,
-  medianDensity: number,
-): string {
+function renderRankedItem(item: RankedItem, index: number, medianDensity: number): string {
   const aboveMedian = (item.density ?? 0) >= medianDensity;
-  const valueColor = aboveMedian ? SEMANTIC.success : SEMANTIC.warning;
+  const valueColor = aboveMedian ? 'var(--value-green)' : 'var(--gold-deep)';
   const density = item.density ?? 0;
   const ratio = item.densityRatio ?? 0;
 
@@ -70,22 +115,20 @@ function renderRankedItem(
 
   return `
 <div class="rank-item">
-  <span class="rank-no">${index}</span>
+  ${rankBadge(index)}
   <div class="rank-body">
     <div class="rank-name">${esc(item.name)}</div>
     <div class="rank-meta">${esc(meta)}</div>
-    <div class="rank-bar"><div style="width:${fmt(Math.min(ratio, 100), 1)}%;background:${valueColor}"></div></div>
+    <div class="data-bar"><div style="width:${fmt(Math.min(ratio, 100), 1)}%;background:${valueColor}"></div></div>
   </div>
   <div class="rank-value">
-    <div class="rank-num" style="color:${valueColor}">${fmt(density)}g</div>
-    <div class="rank-unit">蛋白 / 百元</div>
+    <div class="rank-num" style="color:${valueColor}">${fmt(density)}<span class="rank-unit">g</span></div>
+    <div class="rank-label">蛋白 / 百元</div>
   </div>
 </div>`;
 }
 
-/**
- * 渲染无数据项
- */
+/** 渲染无数据项：中性灰竖条，不参与色阶 */
 function renderUnmatched(name: string, price: number): string {
   return `
 <div class="unmatched-item">
@@ -99,19 +142,20 @@ function renderUnmatched(name: string, price: number): string {
 
 /**
  * 渲染蛋白密度榜（核心主打）
+ *
+ * 唯一使用排名徽标的榜单 —— 排序即价值，值得庆祝。
  */
 export function renderProteinBoard(result: RankResult): string {
   const { ranked, unmatched, coverage, medianDensity, storeName } = result;
 
-  const head = `
-<div class="board-head">
-  <div class="board-title">每百元蛋白密度</div>
-  <div class="board-sub">按实付价折算 · ${esc(storeName)}</div>
-</div>
-${renderCoverage(coverage.matched, coverage.total)}`;
+  const head = boardHead(
+    '每百元蛋白密度',
+    `按实付价折算 · ${storeName}`,
+    renderCoverage(coverage.matched, coverage.total),
+  );
 
   const items = ranked
-    .map((item, i) => renderRankedItem(item, i + 1, medianDensity))
+    .map((item, i) => renderRankedItem(item, i, medianDensity))
     .join('\n');
 
   const noData =
@@ -125,9 +169,15 @@ ${unmatched.map((u) => renderUnmatched(u.name, u.price)).join('\n')}`
     ranked.length === 0
       ? `
 <div class="empty">
+  <div class="empty-icon"></div>
   <div class="empty-title">暂无可计算的数据</div>
   <div class="empty-desc">该门店菜单与官方营养表暂无对应项<br>换一家门店或稍后再试</div>
 </div>`
+      : '';
+
+  const cta =
+    ranked.length > 0
+      ? '<button class="btn-primary" type="button">加入购物车</button>'
       : '';
 
   return `${head}
@@ -135,7 +185,7 @@ ${unmatched.map((u) => renderUnmatched(u.name, u.price)).join('\n')}`
 ${noData}
 ${empty}
 <div class="board-foot">
-  <div class="cta">加入购物车</div>
+  ${cta}
   <div class="compliance">${NEUTRAL_NOTE} · ${COMPLIANCE_FOOTER}</div>
 </div>`;
 }
@@ -144,11 +194,14 @@ ${empty}
  * 渲染此刻可点榜
  */
 export function renderNowBoard(stores: StoreAvailability[], periodText: string): string {
-  const statusMeta: Record<StoreAvailability['status'], { label: string; color: string }> = {
-    open: { label: '在售', color: SEMANTIC.success },
-    closing: { label: '将打烊', color: SEMANTIC.warning },
-    closed: { label: '已打烊', color: SEMANTIC.muted },
-    unavailable: { label: '不可用', color: SEMANTIC.muted },
+  const statusMeta: Record<
+    StoreAvailability['status'],
+    { label: string; color: string; bg: string }
+  > = {
+    open: { label: '在售', color: 'var(--value-green)', bg: '#E7F5EC' },
+    closing: { label: '将打烊', color: 'var(--gold-deep)', bg: 'var(--brand-gold-soft)' },
+    closed: { label: '已打烊', color: 'var(--text-tertiary)', bg: 'var(--bg-sunken)' },
+    unavailable: { label: '不可用', color: 'var(--text-tertiary)', bg: 'var(--bg-sunken)' },
   };
 
   const items = stores
@@ -161,29 +214,35 @@ export function renderNowBoard(stores: StoreAvailability[], periodText: string):
       if (s.closingSoonText) detail.push(s.closingSoonText);
       if (s.distance > 0) detail.push(`${s.distance} 米`);
 
+      const markColor =
+        s.status === 'open'
+          ? 'var(--value-green)'
+          : s.status === 'closing'
+            ? 'var(--brand-gold)'
+            : 'var(--border-strong)';
+
       return `
 <div class="store-item">
-  <span class="store-mark" style="background:${
-    s.status === 'open' ? SEMANTIC.success : s.status === 'closing' ? SEMANTIC.warning : 'var(--color-border-secondary)'
-  }"></span>
+  <span class="store-mark" style="background:${markColor}"></span>
   <div class="store-body">
-    <div class="store-name" ${s.status === 'closed' ? 'style="color:var(--color-text-secondary)"' : ''}>${esc(s.storeName)}</div>
-    <div class="store-time" ${s.status === 'closed' ? 'style="text-decoration:line-through"' : ''}>${esc(timeText)}</div>
+    <div class="store-name${s.status === 'closed' ? ' is-closed' : ''}">${esc(s.storeName)}</div>
+    <div class="store-time${s.status === 'closed' ? ' is-closed' : ''}">${esc(timeText)}</div>
     ${detail.length ? `<div class="store-detail">${esc(detail.join(' · '))}</div>` : ''}
   </div>
-  <span class="store-badge" style="color:${meta.color}">${meta.label}</span>
+  <span class="pill" style="color:${meta.color};background:${meta.bg}">${meta.label}</span>
 </div>`;
     })
     .join('\n');
 
   const openCount = stores.filter((s) => s.status === 'open' || s.status === 'closing').length;
 
-  return `
-<div class="board-head">
-  <div class="board-status"><span class="dot"></span>${esc(periodText)}</div>
-  <div class="board-title">此刻可点</div>
-  <div class="board-sub">官方时段口径 · 附近 ${openCount} 店营业中</div>
-</div>
+  const head = boardHead(
+    '此刻可点',
+    `官方时段口径 · 附近 ${openCount} 店营业中`,
+    `<div class="board-status"><span class="dot"></span>${esc(periodText)}</div>`,
+  );
+
+  return `${head}
 <div class="store-list">${items}</div>
 <div class="board-foot">
   <div class="compliance">营业时间与时段划分均取自官方 MCP 数据 · 供应状态以实时结果为准 · ${COMPLIANCE_FOOTER}</div>
@@ -192,6 +251,8 @@ export function renderNowBoard(stores: StoreAvailability[], periodText: string):
 
 /**
  * 渲染钠值分布榜
+ *
+ * 纯数据呈现 —— 不使用排名徽标，避免引入「谁更好」的暗示。
  */
 export interface SodiumBoardData {
   items: Array<{ productName: string; sodium: number; percentile: number }>;
@@ -200,12 +261,9 @@ export interface SodiumBoardData {
 }
 
 export function renderSodiumBoard(data: SodiumBoardData): string {
-  const shown = data.items;
-
-  const items = shown
+  const items = data.items
     .map((item) => {
-      // 单色阶：浅 → 深 表示 低 → 高
-      const color = sodiumColor(item.percentile);
+      const color = scaleColor(item.percentile);
       return `
 <div class="sodium-item">
   <span class="sodium-bar" style="background:${color}"></span>
@@ -217,27 +275,21 @@ export function renderSodiumBoard(data: SodiumBoardData): string {
     })
     .join('\n');
 
-  return `
-<div class="board-head">
-  <div class="board-title">钠值分布</div>
-  <div class="board-sub">全菜单区间 ${Math.round(data.min)} 至 ${Math.round(data.max)}mg</div>
-  <div class="scale">
-    <span class="scale-label">低</span>
-    <span class="scale-bar"></span>
-    <span class="scale-label">高</span>
-  </div>
-</div>
+  const head = boardHead(
+    '钠值分布',
+    `全菜单区间 ${Math.round(data.min)} 至 ${Math.round(data.max)}mg`,
+    `<div class="scale">
+      <span class="scale-label">低</span>
+      <span class="scale-bar"></span>
+      <span class="scale-label">高</span>
+    </div>`,
+  );
+
+  return `${head}
 <div class="sodium-list">${items}</div>
 <div class="board-foot">
   <div class="compliance">色阶仅表示钠含量相对高低，不含评判含义 · ${COMPLIANCE_FOOTER}</div>
 </div>`;
-}
-
-/** 单色阶映射：琥珀 → 深琥珀（绝不用红绿） */
-function sodiumColor(percentile: number): string {
-  const stops = ['#FAC775', '#EF9F27', '#BA7517', '#854F0B'];
-  const idx = Math.min(stops.length - 1, Math.floor((percentile / 100) * stops.length));
-  return stops[idx] ?? stops[0]!;
 }
 
 /**
@@ -252,19 +304,15 @@ export interface MyBoardData {
 }
 
 export function renderMyBoard(data: MyBoardData): string {
-  const hasData = data.topItems.length > 0;
+  const head = boardHead('我的常点榜', '仅本机运行时计算 · 不存储不上传');
 
-  if (!hasData) {
-    return `
-<div class="board-head">
-  <div class="board-title">我的常点榜</div>
-  <div class="board-sub">仅本机运行时计算 · 不存储不上传</div>
-</div>
+  if (data.topItems.length === 0) {
+    return `${head}
 <div class="empty">
   <div class="empty-icon"></div>
   <div class="empty-title">你的常点榜还是空的</div>
   <div class="empty-desc">点一次外卖或到店<br>这里就会长出你的专属榜单</div>
-  <div class="empty-cta">去点一单</div>
+  <button class="btn-primary btn-primary--inline" type="button">去点一单</button>
 </div>
 <div class="board-foot">
   <div class="compliance">数据来自你的账户，仅用于本次分析 · ${COMPLIANCE_FOOTER}</div>
@@ -275,7 +323,7 @@ export function renderMyBoard(data: MyBoardData): string {
     .map(
       (item, i) => `
 <div class="mine-item">
-  <span class="rank-no">${i + 1}</span>
+  ${rankBadge(i)}
   <div class="mine-body">
     <div class="rank-name">${esc(item.name)}</div>
     <div class="mine-meta">点了 ${item.count} 次</div>
@@ -324,11 +372,7 @@ export function renderMyBoard(data: MyBoardData): string {
 </div>`
       : '';
 
-  return `
-<div class="board-head">
-  <div class="board-title">我的常点榜</div>
-  <div class="board-sub">仅本机运行时计算 · 不存储不上传</div>
-</div>
+  return `${head}
 <div class="section">
   <div class="section-label">你的常点 Top ${data.topItems.length}</div>
   ${top}
@@ -340,58 +384,118 @@ ${expireSection}
 </div>`;
 }
 
-/** 渲染完整样式表 */
+/**
+ * 渲染完整样式表
+ *
+ * 令牌定义见 design/04-麦当劳风格设计规范.md 第 2 节
+ */
 export function renderStyles(): string {
   return `
 <style>
-.board{border:0.5px solid var(--color-border-tertiary);border-radius:12px;background:var(--color-background-primary);overflow:hidden}
-.board-head{padding:14px 16px;border-bottom:0.5px solid var(--color-border-tertiary)}
-.board-title{font-size:15px;font-weight:500}
-.board-sub{font-size:12px;color:var(--color-text-secondary);margin-top:3px}
-.board-status{font-size:12px;color:var(--color-text-secondary);margin-bottom:8px}
-.board-status .dot,.expire-item .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--color-text-warning);margin-right:6px}
-.coverage{padding:10px 16px;border-bottom:0.5px solid var(--color-border-tertiary);display:flex;align-items:center;gap:8px}
-.coverage-text{font-size:12px;color:var(--color-text-secondary);white-space:nowrap}
-.coverage-text strong{font-size:13px;font-weight:500;color:var(--color-text-primary)}
-.coverage-bar{flex:1;height:3px;border-radius:2px;background:var(--color-background-secondary);overflow:hidden}
-.coverage-bar div{height:100%;background:var(--color-text-secondary)}
-.coverage-pct{font-size:12px;color:var(--color-text-tertiary)}
-.coverage-note{padding:8px 16px;font-size:11px;color:var(--color-text-tertiary);background:var(--color-background-secondary);line-height:1.6}
-.rank-item{display:flex;align-items:flex-start;gap:10px;padding:10px 16px;border-bottom:0.5px solid var(--color-border-tertiary)}
-.rank-no{font-size:13px;color:var(--color-text-tertiary);width:14px;flex-shrink:0}
+:root{
+  --brand-red:#DA291C;--brand-red-hover:#B8221A;--brand-red-active:#8E1A14;
+  --brand-gold:#FFC72C;--brand-gold-soft:#FFF3CE;
+  --bg-page:#FFF9F2;--bg-card:#FFFFFF;--bg-sunken:#FDF3E7;--bg-brand-tint:#FFF1EC;
+  --text-primary:#241A14;--text-secondary:#6E5B4E;--text-tertiary:#9C8878;
+  --border:#F0E2D2;--border-strong:#E0CDB8;
+  --value-green:#0F7B3F;--gold-deep:#B26A00;
+  --fs-xs:11px;--fs-sm:12px;--fs-md:13px;--fs-lg:15px;--fs-xl:17px;
+  --r-sm:8px;--r-md:12px;--r-lg:18px;--r-pill:999px;
+  --shadow-card:0 1px 2px rgba(36,26,20,.04),0 8px 24px -12px rgba(36,26,20,.10);
+  --font-base:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --page-bg:#FFF9F2;
+  --page-fg:#241A14;
+}
+
+/* 页面基底：暖米白，替代冷灰 */
+body{background:var(--page-bg);color:var(--page-fg);font-family:var(--font-base);margin:0;padding:20px 12px}
+
+.board{max-width:420px;margin:0 auto;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-card);overflow:hidden}
+
+/* ── 头部 ── */
+.board-head{padding:16px}
+.board-title-row{display:flex;align-items:center;gap:10px}
+.brand-mark{width:26px;height:26px;border-radius:var(--r-sm);background:var(--brand-red);color:#FFFFFF;font-size:var(--fs-md);font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.board-title-block{min-width:0}
+.board-title{font-size:var(--fs-lg);font-weight:700;letter-spacing:-.01em;line-height:1.3}
+.board-sub{font-size:var(--fs-sm);color:var(--text-secondary);margin-top:2px}
+.board-status{font-size:var(--fs-sm);color:var(--text-secondary);margin-top:12px}
+.board-status .dot,.expire-item .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--brand-gold);margin-right:6px;vertical-align:middle}
+
+/* ── 覆盖率（常驻，不可折叠） ── */
+.coverage{padding:12px 16px;border-top:1px solid var(--border);margin:14px -16px -16px;background:var(--bg-brand-tint)}
+.coverage-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.coverage-text{font-size:var(--fs-sm);color:var(--text-secondary)}
+.coverage-text strong{font-size:var(--fs-lg);font-weight:700;color:var(--brand-red)}
+.coverage-pct{font-size:var(--fs-sm);font-weight:500;color:var(--text-secondary)}
+.coverage-bar{height:4px;border-radius:var(--r-pill);background:#F2E0D8;overflow:hidden;margin-top:8px}
+.coverage-bar div{height:100%;border-radius:var(--r-pill);background:var(--brand-red)}
+.coverage-note{font-size:var(--fs-xs);color:var(--text-tertiary);line-height:1.6;margin-top:8px}
+
+/* ── 排名列表 ── */
+.rank-item{display:flex;align-items:flex-start;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border)}
+.rank-item:last-child{border-bottom:none}
+.rank-list{border-top:1px solid var(--border)}
+.rank-badge{width:20px;height:20px;border-radius:6px;font-size:var(--fs-sm);font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.rank-badge--plain{background:var(--bg-sunken);color:var(--text-tertiary)}
 .rank-body{flex:1;min-width:0}
-.rank-name{font-size:13px;font-weight:500}
-.rank-meta,.mine-meta{font-size:12px;color:var(--color-text-secondary);margin-top:2px}
-.rank-bar{height:4px;border-radius:2px;background:var(--color-background-secondary);margin-top:8px;overflow:hidden}
-.rank-bar div{height:100%}
+.rank-name{font-size:var(--fs-md);font-weight:500;line-height:1.4}
+.rank-meta,.mine-meta{font-size:var(--fs-sm);color:var(--text-secondary);margin-top:3px}
+.data-bar{height:6px;border-radius:var(--r-pill);background:var(--bg-sunken);margin-top:8px;overflow:hidden}
+.data-bar div{height:100%;border-radius:var(--r-pill)}
 .rank-value{text-align:right;flex-shrink:0}
-.rank-num{font-size:13px;font-weight:500}
-.rank-unit{font-size:11px;color:var(--color-text-tertiary)}
-.divider{padding:8px 16px;font-size:11px;color:var(--color-text-tertiary);background:var(--color-background-secondary)}
-.unmatched-item{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:0.5px solid var(--color-border-tertiary);background:var(--color-background-secondary)}
-.unmatched-mark{width:4px;height:28px;border-radius:2px;background:var(--color-border-secondary);flex-shrink:0}
-.unmatched-name{font-size:13px;color:var(--color-text-secondary)}
-.unmatched-meta{font-size:11px;color:var(--color-text-tertiary);margin-top:2px}
-.store-item,.sodium-item,.mine-item,.expire-item{display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:0.5px solid var(--color-border-tertiary)}
-.store-mark{width:4px;height:30px;border-radius:2px;flex-shrink:0}
-.store-name,.sodium-name,.expire-name{font-size:13px;font-weight:500}
-.store-time,.sodium-meta{font-size:12px;color:var(--color-text-secondary);margin-top:2px}
-.store-detail{font-size:11px;color:var(--color-text-tertiary);margin-top:3px}
-.store-badge{font-size:12px;flex-shrink:0;padding:3px 9px;border-radius:4px;background:var(--color-background-secondary)}
-.sodium-bar{width:4px;height:30px;border-radius:2px;flex-shrink:0}
-.scale{display:flex;align-items:center;gap:8px;margin-top:10px}
-.scale-label{font-size:11px;color:var(--color-text-tertiary)}
-.scale-bar{flex:1;height:6px;border-radius:3px;background:linear-gradient(to right,#FAC775,#EF9F27,#BA7517,#854F0B)}
-.section{padding:12px 16px;border-bottom:0.5px solid var(--color-border-tertiary)}
-.section-label{font-size:12px;color:var(--color-text-tertiary);margin-bottom:8px}
-.section-value{font-size:13px}
-.empty{padding:32px 24px;text-align:center}
-.empty-icon{width:44px;height:44px;border-radius:50%;background:var(--color-background-secondary);margin:0 auto 16px}
-.empty-title{font-size:15px;font-weight:500;margin-bottom:8px}
-.empty-desc{font-size:13px;color:var(--color-text-secondary);line-height:1.6;margin-bottom:20px}
-.empty-cta{display:inline-block;padding:8px 20px;border-radius:8px;background:var(--color-text-primary);color:var(--color-background-primary);font-size:13px;font-weight:500}
-.board-foot{padding:12px 16px;border-top:0.5px solid var(--color-border-tertiary)}
-.cta{padding:9px;border-radius:8px;background:var(--color-text-primary);color:var(--color-background-primary);font-size:13px;font-weight:500;text-align:center;margin-bottom:10px}
-.compliance{font-size:11px;color:var(--color-text-tertiary);line-height:1.6}
+.rank-num{font-size:var(--fs-lg);font-weight:700;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.rank-unit{font-size:var(--fs-sm);font-weight:500;margin-left:1px}
+.rank-label{font-size:var(--fs-xs);color:var(--text-tertiary);margin-top:2px}
+
+/* ── 无数据分组 ── */
+.divider{padding:8px 16px;font-size:var(--fs-xs);color:var(--text-tertiary);background:var(--bg-sunken);border-top:1px solid var(--border)}
+.unmatched-item{display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid var(--border);background:var(--bg-sunken)}
+.unmatched-item:last-child{border-bottom:none}
+.unmatched-mark{width:4px;height:28px;border-radius:var(--r-pill);background:var(--border-strong);flex-shrink:0}
+.unmatched-body{min-width:0}
+.unmatched-name{font-size:var(--fs-md);color:var(--text-secondary)}
+.unmatched-meta{font-size:var(--fs-xs);color:var(--text-tertiary);margin-top:2px}
+
+/* ── 门店 / 钠值 / 常规列表 ── */
+.store-list,.sodium-list,.mine-list{border-top:1px solid var(--border)}
+.store-item,.sodium-item,.mine-item,.expire-item{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border)}
+.store-item:last-child,.sodium-item:last-child,.mine-item:last-child,.expire-item:last-child{border-bottom:none}
+.store-mark{width:4px;height:32px;border-radius:var(--r-pill);flex-shrink:0}
+.store-body,.sodium-body{flex:1;min-width:0}
+.store-name,.sodium-name,.expire-name{font-size:var(--fs-md);font-weight:500;line-height:1.4}
+.store-name.is-closed{color:var(--text-secondary);font-weight:400}
+.store-time,.sodium-meta{font-size:var(--fs-sm);color:var(--text-secondary);margin-top:3px}
+.store-time.is-closed{color:var(--text-tertiary);text-decoration:line-through}
+.store-detail{font-size:var(--fs-xs);color:var(--text-tertiary);margin-top:3px}
+.pill{font-size:var(--fs-sm);font-weight:500;flex-shrink:0;padding:3px 10px;border-radius:var(--r-pill)}
+.sodium-bar{width:5px;height:32px;border-radius:var(--r-pill);flex-shrink:0}
+.scale{display:flex;align-items:center;gap:8px;margin-top:12px}
+.scale-label{font-size:var(--fs-xs);color:var(--text-tertiary)}
+.scale-bar{flex:1;height:6px;border-radius:var(--r-pill);background:linear-gradient(to right,#F7DCA8,#E8A93C,#C2701A,#8A4A12)}
+
+/* ── 区块 ── */
+.section{padding:14px 16px;border-top:1px solid var(--border)}
+.section-label{font-size:var(--fs-xs);color:var(--text-tertiary);margin-bottom:10px;text-transform:uppercase;letter-spacing:.04em}
+.section-value{font-size:var(--fs-md)}
+
+/* ── 空状态：转化为引导 ── */
+.empty{padding:36px 24px;text-align:center;border-top:1px solid var(--border)}
+.empty-icon{width:48px;height:48px;border-radius:50%;background:var(--bg-sunken);margin:0 auto 16px}
+.empty-title{font-size:var(--fs-lg);font-weight:700;margin-bottom:8px}
+.empty-desc{font-size:var(--fs-md);color:var(--text-secondary);line-height:1.6;margin-bottom:20px}
+
+/* ── 主按钮：品牌红 ── */
+.btn-primary{display:block;width:100%;height:40px;border:none;border-radius:var(--r-md);background:var(--brand-red);color:#FFFFFF;font-family:inherit;font-size:var(--fs-md);font-weight:700;letter-spacing:.02em;cursor:pointer;box-shadow:0 2px 8px rgba(218,41,28,.24);transition:background .15s,box-shadow .15s,transform .15s}
+.btn-primary:hover{background:var(--brand-red-hover);box-shadow:0 4px 12px rgba(218,41,28,.30);transform:translateY(-1px)}
+.btn-primary:active{background:var(--brand-red-active);box-shadow:0 1px 3px rgba(218,41,28,.20);transform:translateY(0)}
+.btn-primary:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(218,41,28,.28)}
+.btn-primary:disabled{background:#E5D9CE;color:#A08D7D;box-shadow:none;cursor:not-allowed;transform:none}
+.btn-primary--inline{display:inline-block;width:auto;padding:0 22px}
+
+/* ── 底部 ── */
+.board-foot{padding:14px 16px;border-top:1px solid var(--border);background:var(--bg-sunken)}
+.compliance{font-size:var(--fs-xs);color:var(--text-tertiary);line-height:1.7}
+.board-foot .btn-primary{margin-bottom:12px}
 </style>`;
 }
