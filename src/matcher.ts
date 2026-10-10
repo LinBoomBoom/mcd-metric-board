@@ -28,6 +28,58 @@ export function normalizeName(name: string): string {
 /** 包含匹配的最小字符数，低于此值不启用包含匹配以防误配 */
 const MIN_CONTAINS_LENGTH = 3;
 
+/**
+ * 营养表索引
+ *
+ * 供 matcher 与 solver 共用，避免重复实现三级匹配。
+ */
+export interface NutritionIndex {
+  exact: Map<string, NutritionItem>;
+  normalized: Map<string, NutritionItem>;
+}
+
+export function buildNutritionIndex(nutrition: NutritionItem[]): NutritionIndex {
+  const exact = new Map<string, NutritionItem>();
+  const normalized = new Map<string, NutritionItem>();
+  for (const item of nutrition) {
+    exact.set(item.productName, item);
+    const norm = normalizeName(item.productName);
+    if (!normalized.has(norm)) normalized.set(norm, item);
+  }
+  return { exact, normalized };
+}
+
+/**
+ * 三级降级查询单个名称对应的营养项
+ *
+ * 与 matchAndRank 使用完全相同的策略，保证两处结果一致。
+ * 查不到返回 undefined —— 调用方必须显式处理「暂无营养数据」，不得猜测。
+ */
+export function lookupNutrition(
+  name: string,
+  index: NutritionIndex,
+): NutritionItem | undefined {
+  const exact = index.exact.get(name);
+  if (exact) return exact;
+
+  const norm = normalizeName(name);
+  const normHit = index.normalized.get(norm);
+  if (normHit) return normHit;
+
+  if (norm.length < MIN_CONTAINS_LENGTH) return undefined;
+
+  const candidates: Array<{ item: NutritionItem; len: number }> = [];
+  for (const [key, item] of index.normalized) {
+    if (key.length < MIN_CONTAINS_LENGTH) continue;
+    if (key.includes(norm) || norm.includes(key)) {
+      candidates.push({ item, len: key.length });
+    }
+  }
+  if (candidates.length === 0) return undefined;
+  candidates.sort((a, b) => a.len - b.len);
+  return candidates[0]!.item;
+}
+
 export interface MatchResult {
   matched: RankedItem[];
   unmatched: UnmatchedItem[];

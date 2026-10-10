@@ -1,6 +1,7 @@
 import type {
   AccountData,
   ApiEnvelope,
+  ComboDetail,
   JsonRpcResponse,
   MenuData,
   NutritionItem,
@@ -216,6 +217,31 @@ export class McdClient {
   async nutrition(): Promise<NutritionItem[]> {
     const raw = await this.call<string>('list-nutrition-foods');
     return parseNutritionCsv(raw);
+  }
+
+  /**
+   * 查询套餐详情（组合可选清单）
+   *
+   * ⚠️ 实测踩坑：入参字段名是 `code`，写成 mealCode / productCode 会报
+   *    60001「未匹配到商品，请重新拉取全量商品列表」
+   *
+   * 返回的 rounds[].choices[] 是本项目三个进阶功能的数据基础：
+   *   - 组合求解：枚举各选择区可选项，交叉求最优搭配
+   *   - 套餐拆解：选项的单点价 vs 套餐内加价，算盈亏平衡
+   *   - 配料定制：choices[].modification.items[].values[] 列出可增删配料
+   */
+  async mealDetail(
+    code: string,
+    storeCode: string,
+    opts: { beType?: 1 | 5 | 6; orderType?: 1 | 2 } = {},
+  ): Promise<ComboDetail> {
+    const beType = opts.beType ?? 1;
+    return this.call<ComboDetail>('query-meal-detail', {
+      code,
+      storeCode,
+      orderType: opts.orderType ?? (beType === 1 ? 1 : 2),
+      beType,
+    });
   }
 
   /** 查询积分账户（含 currentMouthExpirePoint） */

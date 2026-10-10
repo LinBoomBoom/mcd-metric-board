@@ -8,12 +8,18 @@
     "node": ">=18"
   },
   "scripts": {
-    "probe": "node src/cli.js probe",
-    "protein": "node src/cli.js protein",
-    "now": "node src/cli.js now",
-    "sodium": "node src/cli.js sodium",
-    "mine": "node src/cli.js mine",
-    "board": "node src/cli.js board"
+    "probe": "node dist/cli.js probe",
+    "board": "node dist/cli.js board",
+    "protein": "node dist/cli.js protein",
+    "combine": "node dist/cli.js combine",
+    "breakdown": "node dist/cli.js breakdown",
+    "scenario": "node dist/cli.js scenario",
+    "now": "node dist/cli.js now",
+    "sodium": "node dist/cli.js sodium",
+    "mine": "node dist/cli.js mine",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "all": "node dist/cli.js all"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

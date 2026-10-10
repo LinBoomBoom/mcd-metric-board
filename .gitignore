@@ -37,3 +37,8 @@ Thumbs.db
 *.log
 npm-debug.log*
 yarn-error.log*
+
+# ===== 预览产物 =====
+# 本地生成的榜单快照，含实时价格等数据，仅用于开发期查看
+preview/
+*.preview.html

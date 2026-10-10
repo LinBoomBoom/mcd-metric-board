@@ -18,16 +18,29 @@
 
 ---
 
-## 四个榜单
+## 榜单
+
+八个榜单分两层：**四个「看」的榜呈现数据，三个「给答案」的榜给出方案。**
+
+### 一层 · 呈现数据
 
 | 榜单 | 回答的问题 | 使用的 MCP Tool |
 |---|---|---|
+| **总览榜** | 有哪些榜 | 聚合入口 |
 | **此刻可点榜** | 我现在能买到什么 | `now-time-info` · `query-nearby-stores` · `query-meals` |
-| **每百元蛋白密度榜** ⭐ | 这一顿值不值 | `query-meals` · `list-nutrition-foods` · `query-store-coupons` |
-| **钠值分布榜** | 数值上是什么量级 | `list-nutrition-foods` · `query-meal-detail` |
+| **每百元蛋白密度榜** | 这一顿值不值 | `query-meals` · `list-nutrition-foods` |
+| **钠值分布榜** | 数值上是什么量级 | `list-nutrition-foods` |
 | **我的常点榜** | 我的情况怎么样 | `order-list` · `mall-order-list` · `query-my-coupons` · `query-my-account` |
 
-四个榜单合计串联 **10 个 Tool**，跨越营养、价格、门店、订单、积分、券、活动七个数据域。
+### 二层 · 给出方案
+
+| 榜单 | 回答的问题 | 使用的 MCP Tool |
+|---|---|---|
+| **组合配置方案** | ¥13.9 的随心配怎么搭最优 | `query-meal-detail` · `query-meals` · `list-nutrition-foods` |
+| **套餐逐项拆解** | 这套餐里每项单点要多少钱 | `query-meal-detail` · `query-meals` |
+| **场景方案** | 预算内 / 多人 / 一份管饱各有什么 | `query-meals` · `list-nutrition-foods` |
+
+合计串联 **11 个 Tool**，跨越营养、价格、门店、订单、积分、券、活动、套餐组合八个数据域。
 
 ### 核心指标怎么算
 
@@ -35,7 +48,35 @@
 蛋白密度 = 蛋白质(克) ÷ 实付价(元) × 100
 ```
 
-`query-meals` 返回的 `currentPrice` **已经是实付价**，因此默认情况下无需再调用价格试算工具。
+`query-meals` 返回的 `currentPrice` **已经是实付价**，因此默认无需再调用价格试算工具。
+
+### 组合求解器怎么工作
+
+```
+query-meal-detail(code, storeCode)
+        ↓  data.rounds[]        每个选择区（如「蓝区」「主食任意选」）
+           └ choices[]          该区全部可选项 + 加价浮动（±¥1）
+        ↓
+笛卡尔积枚举：蓝区 8 选 1 × 粉区 16 选 1 = 128 种组合
+        ↓
+交叉 query-meals 的单点价 + list-nutrition-foods 的蛋白质
+        ↓
+按目标求解：蛋白密度最高 / 相对单点省最多 / 蛋白质合计最高 / 不加价最优
+```
+
+`rounds[].choices[]` 是这套能力的基础。榜单上 57 个提交项目都停在菜单列表层，没有项目用过这一层数据。
+
+---
+
+## 长列表怎么处理
+
+蛋白密度榜有 59 项、钠值分布榜有 158 项，一屏铺完无法阅读。因此：
+
+- **分档 Tab**：蛋白密度榜按价位分档（≤¥20 / ¥20–30 / >¥30），钠值榜按数值区间分档
+- **首屏限流**：「全部」页只展示前 20 项并提示按档查看
+- **切换过渡**：Tab 切换走 CSS `:checked`，另附脚本接管容器高度过渡，切换时高度平滑变化而非跳变
+- **尊重减弱动效**：检测 `prefers-reduced-motion`，用户关闭动效时不播高度动画
+- **无脚本可用**：切换本身不依赖脚本，宿主剥离脚本时 Tab 仍能正常切换
 
 ---
 
@@ -151,12 +192,16 @@ export MCP_TOKEN="你的 Token"
 ## 使用
 
 ```bash
-npm run probe     # 验证 MCP 连通性
-npm run board     # 总览榜（四榜导航，主界面）
-npm run protein   # 每百元蛋白密度榜（核心主打）
-npm run now       # 此刻可点榜
-npm run sodium    # 钠值分布榜
-npm run mine      # 我的常点榜
+npm run all        # 完整报告：全部榜单渲染到一页
+npm run board      # 总览榜（导航）
+npm run protein    # 每百元蛋白密度榜
+npm run combine    # 组合配置方案（随心配求解器）
+npm run breakdown  # 套餐逐项拆解（盈亏平衡）
+npm run scenario   # 场景方案
+npm run now        # 此刻可点榜
+npm run sodium     # 钠值分布榜
+npm run mine       # 我的常点榜
+npm run probe      # 验证 MCP 连通性
 ```
 
 各榜单输出为**完整 HTML 文档**，可直接在浏览器打开，也可被宿主容器嵌入。

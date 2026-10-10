@@ -1,4 +1,12 @@
-import type { RankedItem, RankResult, StoreAvailability } from './types.js';
+import type {
+  BreakdownResult,
+  ComboPick,
+  RankedItem,
+  RankResult,
+  ScenarioResult,
+  SolveResult,
+  StoreAvailability,
+} from './types.js';
 import { COMPLIANCE_FOOTER, NEUTRAL_NOTE } from './compliance.js';
 
 /**
@@ -154,15 +162,41 @@ export function renderProteinBoard(result: RankResult): string {
     renderCoverage(coverage.matched, coverage.total),
   );
 
-  const items = ranked
-    .map((item, i) => renderRankedItem(item, i, medianDensity))
-    .join('\n');
+  /** 单档列表：序号用档内排名，便于档内比较 */
+  const list = (items: RankedItem[]): string =>
+    items.length > 0
+      ? `<div class="rank-list">${items
+          .map((item, i) => renderRankedItem(item, i, medianDensity))
+          .join('')}</div>`
+      : `<div class="empty"><div class="empty-title">该档位暂无餐品</div><div class="empty-desc">换个档位或换一家门店看看</div></div>`;
+
+  const panels: TabPanel[] = [];
+  const allShown = ranked.slice(0, ALL_TAB_CAP);
+  panels.push({
+    label: '全部',
+    count: ranked.length,
+    html:
+      list(allShown) +
+      (ranked.length > allShown.length
+        ? `<div class="more-hint">另有 ${ranked.length - allShown.length} 项未展示，可按价位档查看</div>`
+        : ''),
+  });
+
+  for (const band of PRICE_BANDS) {
+    const items = ranked.filter((r) => band.test(r.price));
+    panels.push({ label: band.label, count: items.length, html: list(items) });
+  }
 
   const noData =
     unmatched.length > 0
       ? `
 <div class="divider"><span>暂无营养数据 · ${unmatched.length} 项</span></div>
-${unmatched.map((u) => renderUnmatched(u.name, u.price)).join('\n')}`
+${unmatched.slice(0, 8).map((u) => renderUnmatched(u.name, u.price)).join('')}
+${
+  unmatched.length > 8
+    ? `<div class="more-hint">另有 ${unmatched.length - 8} 项暂无营养数据</div>`
+    : ''
+}`
       : '';
 
   const empty =
@@ -175,13 +209,10 @@ ${unmatched.map((u) => renderUnmatched(u.name, u.price)).join('\n')}`
 </div>`
       : '';
 
-  const cta =
-    ranked.length > 0
-      ? '<button class="btn-primary" type="button">加入购物车</button>'
-      : '';
+  const cta = ranked.length > 0 ? '<button class="btn-primary" type="button">加入购物车</button>' : '';
 
   return `${head}
-<div class="rank-list">${items}</div>
+${renderTabs(panels)}
 ${noData}
 ${empty}
 <div class="board-foot">
@@ -260,11 +291,10 @@ export interface SodiumBoardData {
   max: number;
 }
 
-export function renderSodiumBoard(data: SodiumBoardData): string {
-  const items = data.items
-    .map((item) => {
-      const color = scaleColor(item.percentile);
-      return `
+/** 单条钠值项 */
+function sodiumRow(item: { productName: string; sodium: number; percentile: number }): string {
+  const color = scaleColor(item.percentile);
+  return `
 <div class="sodium-item">
   <span class="sodium-bar" style="background:${color}"></span>
   <div class="sodium-body">
@@ -272,9 +302,9 @@ export function renderSodiumBoard(data: SodiumBoardData): string {
     <div class="sodium-meta">钠 ${Math.round(item.sodium)}mg · 全菜单 ${fmt(item.percentile, 0)}% 分位</div>
   </div>
 </div>`;
-    })
-    .join('\n');
+}
 
+export function renderSodiumBoard(data: SodiumBoardData): string {
   const head = boardHead(
     '钠值分布',
     `全菜单区间 ${Math.round(data.min)} 至 ${Math.round(data.max)}mg`,
@@ -285,8 +315,28 @@ export function renderSodiumBoard(data: SodiumBoardData): string {
     </div>`,
   );
 
+  const list = (items: SodiumBoardData['items']): string =>
+    items.length > 0
+      ? `<div class="sodium-list">${items.map(sodiumRow).join('')}</div>`
+      : `<div class="empty"><div class="empty-title">该区间暂无餐品</div><div class="empty-desc">换个区间看看</div></div>`;
+
+  /** 全菜单 158 项，先按数值升序，分档展示 */
+  const ascending = [...data.items].sort((a, b) => a.sodium - b.sodium);
+
+  const panels: TabPanel[] = [
+    {
+      label: '最低 20',
+      count: data.items.length,
+      html: list(ascending.slice(0, ALL_TAB_CAP)),
+    },
+    ...SODIUM_BANDS.map((band) => {
+      const items = ascending.filter((i) => band.test(i.sodium));
+      return { label: band.label, count: items.length, html: list(items) };
+    }),
+  ];
+
   return `${head}
-<div class="sodium-list">${items}</div>
+${renderTabs(panels)}
 <div class="board-foot">
   <div class="compliance">色阶仅表示钠含量相对高低，不含评判含义 · ${COMPLIANCE_FOOTER}</div>
 </div>`;
@@ -470,6 +520,307 @@ export function renderOverviewBoard(data: OverviewData): string {
 </div>`;
 }
 
+/* ═══════════════════════════════════════════════════════════
+   Tab 组件
+   纯 CSS 切换（radio + :checked），保证宿主剥离脚本时仍可切换；
+   文档中另附脚本接管高度动画，实现丝滑过渡。两层机制互不依赖。
+   ═══════════════════════════════════════════════════════════ */
+
+let tabsSeq = 0;
+
+export interface TabPanel {
+  label: string;
+  /** 该页条数，显示为角标 */
+  count?: number;
+  html: string;
+}
+
+/**
+ * 渲染 Tab 组
+ *
+ * 无脚本时的行为：面板以 grid 叠放，靠 :checked 控制可见性，容器高度取最高页。
+ * 有脚本时的行为：脚本把容器高度锁定为当前页高度并过渡，切换丝滑。
+ */
+export function renderTabs(panels: TabPanel[]): string {
+  if (panels.length === 0) return '';
+  if (panels.length === 1) return panels[0]!.html;
+
+  tabsSeq += 1;
+  const g = `tb${tabsSeq}`;
+
+  const radios = panels
+    .map(
+      (_, i) =>
+        `<input class="tabs__radio" type="radio" name="${g}" id="${g}-${i}"${i === 0 ? ' checked' : ''}>`,
+    )
+    .join('');
+
+  const labels = panels
+    .map(
+      (p, i) =>
+        `<label class="tabs__tab" for="${g}-${i}">${esc(p.label)}${
+          p.count !== undefined ? `<span class="tabs__cnt">${p.count}</span>` : ''
+        }</label>`,
+    )
+    .join('');
+
+  const bodies = panels.map((p) => `<div class="tabs__panel">${p.html}</div>`).join('');
+
+  const rules = panels
+    .map((_, i) => {
+      const sel = `#${g}-${i}:checked`;
+      return (
+        `${sel}~.tabs__panels>.tabs__panel:nth-child(${i + 1}){opacity:1;visibility:visible;transform:none}` +
+        `${sel}~.tabs__bar>.tabs__tab:nth-of-type(${i + 1}){color:var(--text-primary)}` +
+        `${sel}~.tabs__bar>.tabs__ink{transform:translateX(${i * 100}%)}`
+      );
+    })
+    .join('');
+
+  return (
+    `<style>${rules}</style>` +
+    `<div class="tabs" data-tabs>` +
+    radios +
+    `<div class="tabs__bar" style="--n:${panels.length}">${labels}<span class="tabs__ink"></span></div>` +
+    `<div class="tabs__panels">${bodies}</div>` +
+    `</div>`
+  );
+}
+
+/** 价格分档，用于长列表分组 */
+const PRICE_BANDS = [
+  { label: '≤¥20', test: (p: number) => p <= 20 },
+  { label: '¥20–30', test: (p: number) => p > 20 && p <= 30 },
+  { label: '>¥30', test: (p: number) => p > 30 },
+] as const;
+
+/** 钠值分档，用于长列表分组（仅数值区间，不含评判） */
+const SODIUM_BANDS = [
+  { label: '<400mg', test: (v: number) => v < 400 },
+  { label: '400–700mg', test: (v: number) => v >= 400 && v < 700 },
+  { label: '≥700mg', test: (v: number) => v >= 700 },
+] as const;
+
+/** 「全部」页的条数上限，超出提示用分组查看 */
+const ALL_TAB_CAP = 20;
+
+/**
+ * 渲染组合求解榜（随心配）
+ *
+ * 按求解目标分 Tab：密度最优 / 省最多 / 蛋白最高 / 不加价。
+ */
+export function renderCombineBoard(result: SolveResult): string {
+  const { roundsSummary } = result;
+
+  const coverageNote = `
+<div class="note">
+  <div class="note__row"><span>理论组合</span><strong>${result.totalCombos}</strong></div>
+  <div class="note__row"><span>可完整比价</span><strong>${result.comparableCombos}</strong></div>
+  <div class="note__row"><span>有营养数据</span><strong>${result.nutritionCombos}</strong></div>
+  <div class="note__text">套餐内小食与饮品多数不单独售卖，因此无法取得单点价；未取得的一律不计入比价，不按同类项估算。</div>
+</div>`;
+
+  const roundChips = roundsSummary
+    .map(
+      (r) =>
+        `<div class="chip-row"><span class="chip-row__name">${esc(r.name)}</span><span class="chip-row__val">${r.choiceCount} 选 1 · 可定价 ${r.pricedCount} · 有营养 ${r.nutritionCount}</span></div>`,
+    )
+    .join('');
+
+  const renderPick = (p: ComboPick | null, objective: string): string => {
+    if (!p) {
+      return `<div class="empty"><div class="empty-title">该目标暂无可计算组合</div><div class="empty-desc">受可定价项覆盖限制，换其他目标看看</div></div>`;
+    }
+    const items = p.items
+      .map(
+        (it) => `
+<div class="pick-item">
+  <div class="pick-item__body">
+    <div class="pick-item__name">${esc(it.name)}</div>
+    <div class="pick-item__meta">${esc(it.roundName)}${
+      it.diffPrice !== 0
+        ? ` · 套餐内${it.diffPrice > 0 ? '加' : '减'} ¥${Math.abs(it.diffPrice).toFixed(1)}`
+        : ' · 不加价'
+    }${it.singlePrice !== null ? ` · 单点 ¥${it.singlePrice.toFixed(1)}` : ' · 未单独售卖'}</div>
+  </div>
+  ${it.protein !== null ? `<span class="pick-item__p">${it.protein.toFixed(0)}g</span>` : ''}
+</div>`,
+      )
+      .join('');
+
+    const stats: string[] = [];
+    stats.push(
+      `<div class="stat"><div class="stat__v">¥${p.totalPrice.toFixed(1)}</div><div class="stat__k">套餐实付</div></div>`,
+    );
+    if (p.singleSum !== null) {
+      stats.push(
+        `<div class="stat"><div class="stat__v stat__v--strike">¥${p.singleSum.toFixed(1)}</div><div class="stat__k">单点合计</div></div>`,
+      );
+    }
+    if (p.saved !== null) {
+      stats.push(
+        `<div class="stat"><div class="stat__v stat__v--good">省 ¥${p.saved.toFixed(1)}</div><div class="stat__k">相对单点</div></div>`,
+      );
+    }
+    if (p.density !== null) {
+      stats.push(
+        `<div class="stat"><div class="stat__v">${p.density.toFixed(1)}g</div><div class="stat__k">蛋白 / 百元</div></div>`,
+      );
+    }
+
+    return `
+<div class="objective">${esc(objective)}</div>
+<div class="pick">${items}</div>
+<div class="stats">${stats.join('')}</div>`;
+  };
+
+  const panels: TabPanel[] = [
+    { label: '密度最优', html: renderPick(result.bestByDensity, '蛋白密度最高') },
+    { label: '省最多', html: renderPick(result.bestBySaving, '相对单点省得最多') },
+    { label: '蛋白最高', html: renderPick(result.bestByProtein, '蛋白质合计最高') },
+    { label: '不加价', html: renderPick(result.bestNoSurcharge, '不超基础价的前提下最优') },
+  ];
+
+  const head = `
+<div class="board-head">
+  <div class="board-title-row">
+    ${brandMark()}
+    <div class="board-title-block">
+      <div class="board-title">组合配置方案</div>
+      <div class="board-sub">${esc(result.comboName)} · 基础价 ¥${result.basePrice.toFixed(1)}${
+        result.originalPrice !== null ? ` · 官方标注原价 ¥${result.originalPrice.toFixed(1)}` : ''
+      }</div>
+    </div>
+  </div>
+</div>
+${coverageNote}
+<div class="chip-list">${roundChips}</div>`;
+
+  return `${head}${renderTabs(panels)}
+<div class="board-foot">
+  <div class="compliance">组合与价格均为官方 MCP 实时数据计算结果 · ${COMPLIANCE_FOOTER}</div>
+</div>`;
+}
+
+/**
+ * 渲染套餐拆解榜（盈亏平衡）
+ */
+export function renderBreakdownBoard(result: BreakdownResult): string {
+  const rows = result.items
+    .map((it) => {
+      const isPriced = it.singlePrice !== null;
+      return `
+<div class="bd-item${isPriced ? '' : ' bd-item--dim'}">
+  <div class="bd-body">
+    <div class="bd-name">${esc(it.name)}</div>
+    <div class="bd-meta">${esc(it.roundName)}${
+      it.protein !== null ? ` · 蛋白 ${it.protein.toFixed(0)}g` : ''
+    }</div>
+  </div>
+  <div class="bd-right">
+    ${
+      isPriced
+        ? `<div class="bd-single">单点 ¥${it.singlePrice!.toFixed(1)}</div>
+           <div class="bd-diff">套餐内 ${it.diffPrice > 0 ? `+¥${it.diffPrice.toFixed(1)}` : it.diffPrice < 0 ? `−¥${Math.abs(it.diffPrice).toFixed(1)}` : '不加价'}</div>`
+        : `<div class="bd-single bd-single--na">未单独售卖</div>
+           <div class="bd-diff">套餐内 ${it.diffPrice > 0 ? `+¥${it.diffPrice.toFixed(1)}` : it.diffPrice < 0 ? `−¥${Math.abs(it.diffPrice).toFixed(1)}` : '不加价'}</div>`
+    }
+  </div>
+</div>`;
+    })
+    .join('');
+
+  const priced = result.items.filter((i) => i.singlePrice !== null);
+  const best = priced.length > 0 ? priced[0] : null;
+
+  const highlight =
+    best && best.value !== null
+      ? `
+<div class="note">
+  <div class="note__text">这组里单点价最高的搭配：<strong>${esc(best.name)}</strong> —— 单点 ¥${best.singlePrice!.toFixed(1)}${
+    best.diffPrice > 0
+      ? `，套餐内加 ¥${best.diffPrice.toFixed(1)} 即可拿到`
+      : best.diffPrice < 0
+        ? `，套餐内还减 ¥${Math.abs(best.diffPrice).toFixed(1)}`
+        : '，套餐内不加价'
+  }。套餐基础价 ¥${result.basePrice.toFixed(1)}${
+    result.originalPrice !== null ? `，官方标注原价 ¥${result.originalPrice.toFixed(1)}` : ''
+  }。</div>
+</div>`
+      : '';
+
+  return `
+<div class="board-head">
+  <div class="board-title-row">
+    ${brandMark()}
+    <div class="board-title-block">
+      <div class="board-title">套餐逐项拆解</div>
+      <div class="board-sub">${esc(result.comboName)} · 基础价 ¥${result.basePrice.toFixed(1)}</div>
+    </div>
+  </div>
+</div>
+<div class="note">
+  <div class="note__row"><span>可算出单点价</span><strong>${result.pricedCount} / ${result.totalCount}</strong></div>
+  <div class="note__text">门店菜单只为可单独购买的餐品标价，套餐内多数小食与饮品不单卖，因此无法逐项比价。</div>
+</div>
+${highlight}
+<div class="bd-list">${rows}</div>
+<div class="board-foot">
+  <div class="compliance">价格均取自官方 MCP 实时菜单，未按同类项估算 · ${COMPLIANCE_FOOTER}</div>
+</div>`;
+}
+
+/**
+ * 渲染场景榜
+ *
+ * 用客观约束定义场景，而非人群标签 —— 不做任何健康宣称。
+ */
+export function renderScenarioBoard(results: ScenarioResult[]): string {
+  const panels: TabPanel[] = results.map((r) => {
+    const rows = r.hits
+      .map((h, i) => {
+        const num = h.density !== null ? `${h.density.toFixed(1)}g` : '—';
+        return `
+<div class="rank-item">
+  ${rankBadge(i)}
+  <div class="rank-body">
+    <div class="rank-name">${esc(h.name)}</div>
+    <div class="rank-meta">¥${h.price.toFixed(1)}${
+      h.protein !== null ? ` · 蛋白 ${h.protein.toFixed(0)}g` : ' · 暂无营养数据'
+    }${h.sodium !== null ? ` · 钠 ${Math.round(h.sodium)}mg` : ''}</div>
+  </div>
+  <div class="rank-value">
+    <div class="rank-num">${num}</div>
+    <div class="rank-label">蛋白 / 百元</div>
+  </div>
+</div>`;
+      })
+      .join('');
+
+    const body =
+      r.hits.length > 0
+        ? `<div class="scenario-criteria">筛选条件 · ${esc(r.scenario.criteria)} · 命中 ${r.totalMatched} 项，显示前 ${r.hits.length}</div><div class="rank-list">${rows}</div>`
+        : `<div class="empty"><div class="empty-title">该场景暂无命中</div><div class="empty-desc">换一个场景或换一家门店看看</div></div>`;
+
+    return { label: r.scenario.title, count: r.totalMatched, html: body };
+  });
+
+  return `
+<div class="board-head">
+  <div class="board-title-row">
+    ${brandMark()}
+    <div class="board-title-block">
+      <div class="board-title">场景方案</div>
+      <div class="board-sub">按客观条件筛选，不做推荐判断</div>
+    </div>
+  </div>
+</div>
+${renderTabs(panels)}
+<div class="board-foot">
+  <div class="compliance">场景为客观筛选条件，结果按数据排序，不构成消费或营养建议 · ${COMPLIANCE_FOOTER}</div>
+</div>`;
+}
+
 /** 包裹为榜单容器；wide 用于总览榜的多卡栅格 */
 export function wrapBoard(inner: string, wide = false): string {
   return `<div class="board${wide ? ' board--wide' : ''}">${inner}</div>`;
@@ -498,9 +849,119 @@ ${renderStyles()}
 <div class="page">
 ${board}
 </div>
+${TAB_SCRIPT}
 </body>
 </html>`;
 }
+
+/** 完整报告的一条：标签 + 榜单 */
+export interface ReportSection {
+  title: string;
+  tag?: string;
+  board: string;
+  wide?: boolean;
+}
+
+/**
+ * 渲染完整报告（多榜同页）
+ *
+ * 存在的必要性：Tab 的 radio id 由全局自增序号生成，
+ * 各榜若分别独立渲染再拼到同一文档，id 会冲突导致切换失效。
+ * 由本函数在单次渲染流程内组装，可保证 id 唯一。
+ */
+export function renderReportDocument(
+  title: string,
+  sections: ReportSection[],
+  hero?: { heading: string; sub: string },
+): string {
+  const items = sections
+    .map(
+      (s) => `
+<div class="stack__item${s.wide ? ' stack__item--wide' : ''}">
+  <div class="stack__label">
+    <span class="stack__title">${esc(s.title)}</span>
+    ${s.tag ? `<span class="stack__tag">${esc(s.tag)}</span>` : ''}
+  </div>
+  ${s.board}
+</div>`,
+    )
+    .join('');
+
+  const heroHtml = hero
+    ? `<div class="stack__hero"><h1>${esc(hero.heading)}</h1><p>${esc(hero.sub)}</p></div>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<meta name="description" content="麦麦参考榜 · 基于麦当劳官方 MCP 的客观指标决策榜单。非麦当劳官方产品。">
+<title>${esc(title)}</title>
+${renderStyles()}
+</head>
+<body>
+<div class="page">
+<div class="stack">${heroHtml}${items}</div>
+</div>
+${TAB_SCRIPT}
+</body>
+</html>`;
+}
+
+/**
+ * Tab 高度过渡脚本
+ *
+ * 职责单一：把面板容器的高度锁定为当前页高度并做过渡，使切换丝滑。
+ * 切换本身由 CSS :checked 完成，因此本脚本缺失时 Tab 依然可用
+ * （退化为容器高度取最高页，无高度动画）。
+ */
+const TAB_SCRIPT = `<script>
+(function(){
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  document.querySelectorAll('[data-tabs]').forEach(function(tabs){
+    var wrap = tabs.querySelector('.tabs__panels');
+    if(!wrap) return;
+    var panels = [].slice.call(wrap.querySelectorAll('.tabs__panel'));
+    if(!panels.length) return;
+
+    function active(){
+      for(var i=0;i<panels.length;i++){
+        if(getComputedStyle(panels[i]).visibility === 'visible') return panels[i];
+      }
+      return panels[0];
+    }
+    function measure(){
+      var p = active();
+      if(!p) return;
+      wrap.style.height = p.offsetHeight + 'px';
+    }
+    function enable(){
+      tabs.classList.add('tabs--anim');
+      measure();
+    }
+
+    tabs.querySelectorAll('.tabs__radio').forEach(function(r){
+      r.addEventListener('change', function(){
+        if(reduce){ wrap.style.height = 'auto'; return; }
+        measure();
+      });
+    });
+
+    // 首屏测量：等字体与布局稳定后再锁高
+    if(document.readyState === 'complete') enable();
+    else window.addEventListener('load', enable);
+
+    if(window.ResizeObserver){
+      var ro = new ResizeObserver(function(){ measure(); });
+      panels.forEach(function(p){ ro.observe(p); });
+    } else {
+      window.addEventListener('resize', measure);
+    }
+  });
+})();
+</script>`;
 
 /**
  * 渲染完整样式表
@@ -654,5 +1115,76 @@ body{margin:0;background:var(--bg-page);color:var(--page-fg);font-family:var(--f
 .empty-icon{position:relative}
 .empty-icon::before{content:"";position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:19px;height:15px;border:2px solid var(--border-strong);border-radius:3px}
 .empty-icon::after{content:"";position:absolute;left:50%;top:calc(50% - 5px);transform:translateX(-50%);width:9px;height:2px;background:var(--brand-gold);border-radius:1px}
+
+/* ── Tab 组件 ── */
+.tabs{position:relative}
+.tabs__radio{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.tabs__bar{position:relative;display:flex;gap:2px;margin:12px 16px 4px;padding:4px;background:var(--bg-sunken);border-radius:var(--r-pill)}
+.tabs__tab{flex:1;display:flex;align-items:center;justify-content:center;gap:4px;padding:8px 4px;border-radius:var(--r-pill);font-size:var(--fs-sm);font-weight:500;color:var(--text-secondary);cursor:pointer;position:relative;z-index:1;white-space:nowrap;transition:color .28s ease;-webkit-tap-highlight-color:transparent}
+.tabs__tab:hover{color:var(--text-primary)}
+.tabs__cnt{font-size:10px;font-weight:700;color:var(--text-tertiary);transition:color .28s ease}
+.tabs__tab:hover .tabs__cnt{color:var(--text-secondary)}
+.tabs__ink{position:absolute;top:4px;bottom:4px;left:4px;width:calc((100% - 8px) / var(--n,2));background:var(--bg-card);border-radius:var(--r-pill);box-shadow:0 1px 3px rgba(36,26,20,.10);transition:transform .34s cubic-bezier(.34,1.2,.64,1);pointer-events:none}
+/* 无脚本兜底：面板叠放，靠 :checked 控制可见性 */
+.tabs__panels{display:grid;overflow:hidden}
+.tabs__panel{grid-area:1/1;opacity:0;visibility:hidden;transform:translateY(6px);transition:opacity .3s ease,transform .3s ease,visibility .3s ease;min-width:0}
+/* 有脚本时由脚本接管高度过渡 */
+.tabs--anim .tabs__panels{transition:height .34s cubic-bezier(.34,1.2,.64,1)}
+
+/* ── 说明块 ── */
+.note{padding:12px 16px;background:var(--bg-brand-tint);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.note__row{display:flex;justify-content:space-between;font-size:var(--fs-sm);color:var(--text-secondary);line-height:1.9}
+.note__row strong{color:var(--brand-red);font-weight:700}
+.note__text{font-size:var(--fs-xs);color:var(--text-tertiary);line-height:1.65;margin-top:6px}
+.note__text strong{color:var(--text-secondary)}
+
+/* ── 组合求解 ── */
+.chip-list{padding:10px 16px;border-bottom:1px solid var(--border)}
+.chip-row{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:3px 0}
+.chip-row__name{font-size:var(--fs-sm);font-weight:500;flex-shrink:0}
+.chip-row__val{font-size:var(--fs-xs);color:var(--text-tertiary);text-align:right}
+.objective{padding:10px 16px 0;font-size:var(--fs-xs);color:var(--text-tertiary);letter-spacing:.02em}
+.pick{padding:10px 16px 4px}
+.pick-item{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)}
+.pick-item:last-child{border-bottom:none}
+.pick-item__body{flex:1;min-width:0}
+.pick-item__name{font-size:var(--fs-md);font-weight:500;line-height:1.4}
+.pick-item__meta{font-size:var(--fs-xs);color:var(--text-tertiary);margin-top:3px}
+.pick-item__p{font-size:var(--fs-sm);font-weight:700;color:var(--value-green);flex-shrink:0}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px;padding:12px 16px 16px}
+.stat{background:var(--bg-sunken);border-radius:var(--r-md);padding:10px 11px}
+.stat__v{font-size:var(--fs-lg);font-weight:700;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.stat__v--strike{color:var(--text-tertiary);text-decoration:line-through;font-weight:500}
+.stat__v--good{color:var(--value-green)}
+.stat__k{font-size:10px;color:var(--text-tertiary);margin-top:3px}
+
+/* ── 套餐拆解 ── */
+.bd-list{border-top:1px solid var(--border)}
+.bd-item{display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid var(--border)}
+.bd-item:last-child{border-bottom:none}
+.bd-item--dim{background:var(--bg-sunken)}
+.bd-body{flex:1;min-width:0}
+.bd-name{font-size:var(--fs-md);font-weight:500;line-height:1.4}
+.bd-body .bd-meta{font-size:var(--fs-xs);color:var(--text-tertiary);margin-top:3px}
+.bd-right{text-align:right;flex-shrink:0}
+.bd-single{font-size:var(--fs-sm);font-weight:500;color:var(--text-secondary);font-variant-numeric:tabular-nums}
+.bd-single--na{color:var(--text-tertiary);font-weight:400}
+.bd-diff{font-size:10px;color:var(--brand-red);margin-top:2px;font-weight:500}
+.bd-item--dim .bd-diff{color:var(--text-tertiary);font-weight:400}
+
+/* ── 场景 ── */
+.scenario-criteria{padding:10px 16px;font-size:var(--fs-xs);color:var(--text-tertiary);background:var(--bg-sunken);border-bottom:1px solid var(--border)}
+.more-hint{padding:10px 16px;font-size:var(--fs-xs);color:var(--text-tertiary);text-align:center;border-top:1px solid var(--border)}
+
+/* ── 完整报告：多榜纵向堆叠 ── */
+.stack{display:flex;flex-direction:column;gap:30px;align-items:center;width:100%}
+.stack__item{width:100%;max-width:480px}
+.stack__item--wide{max-width:760px}
+.stack__label{display:flex;align-items:baseline;gap:8px;margin:0 0 10px}
+.stack__title{font-size:var(--fs-md);font-weight:700;letter-spacing:-.01em}
+.stack__tag{font-size:var(--fs-xs);color:var(--text-tertiary)}
+.stack__hero{width:100%;max-width:760px;margin-bottom:6px}
+.stack__hero h1{font-size:22px;font-weight:700;letter-spacing:-.02em;margin:0;color:var(--text-primary)}
+.stack__hero p{font-size:var(--fs-md);color:var(--text-secondary);line-height:1.7;margin:10px 0 0}
 </style>`;
 }
