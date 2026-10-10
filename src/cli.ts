@@ -2,11 +2,14 @@ import { McdClient } from './mcp-client.js';
 import { matchAndRank, rankBySodium } from './matcher.js';
 import { assertCompliance, ComplianceError } from './compliance.js';
 import {
+  renderDocument,
   renderMyBoard,
   renderNowBoard,
+  renderOverviewBoard,
   renderProteinBoard,
   renderSodiumBoard,
   renderStyles,
+  wrapBoard,
   type MyBoardData,
 } from './render.js';
 import type { RankResult, Store, StoreAvailability } from './types.js';
@@ -115,9 +118,7 @@ async function cmdProtein(client: McdClient): Promise<void> {
 
   console.error(`匹配 ${matchedCount}/${totalCount}，榜首密度 ${maxDensity.toFixed(1)}g/百元`);
 
-  const html = renderStyles() + '<div class="board">' + renderProteinBoard(result) + '</div>';
-  assertCompliance(stripTags(html), '蛋白密度榜');
-  console.log(html);
+  emit('麦麦参考榜 · 每百元蛋白密度', renderProteinBoard(result));
 }
 
 async function cmdNow(client: McdClient): Promise<void> {
@@ -160,9 +161,7 @@ async function cmdNow(client: McdClient): Promise<void> {
     ? `官方时段 · ${period.period} ${period.time}`
     : '按营业时间判定';
 
-  const html = renderStyles() + '<div class="board">' + renderNowBoard(availables, periodText) + '</div>';
-  assertCompliance(stripTags(html), '此刻可点榜');
-  console.log(html);
+  emit('麦麦参考榜 · 此刻可点', renderNowBoard(availables, periodText));
 }
 
 async function cmdSodium(client: McdClient): Promise<void> {
@@ -170,9 +169,7 @@ async function cmdSodium(client: McdClient): Promise<void> {
   const nutrition = await client.nutrition();
   const { items, min, max } = rankBySodium(nutrition);
 
-  const html = renderStyles() + '<div class="board">' + renderSodiumBoard({ items, min, max }) + '</div>';
-  assertCompliance(stripTags(html), '钠值分布榜');
-  console.log(html);
+  emit('麦麦参考榜 · 钠值分布', renderSodiumBoard({ items, min, max }));
 }
 
 async function cmdMine(client: McdClient): Promise<void> {
@@ -191,19 +188,77 @@ async function cmdMine(client: McdClient): Promise<void> {
   }
 
   // 历史订单与优惠券为个人数据，仅运行时使用，不落盘
-  const html = renderStyles() + '<div class="board">' + renderMyBoard(data) + '</div>';
-  assertCompliance(stripTags(html), '我的常点榜');
-  console.log(html);
+  emit('麦麦参考榜 · 我的常点', renderMyBoard(data));
 }
 
+/**
+ * 总览榜（主界面）
+ *
+ * 门店查询失败时降级为静态总览，不中断输出 ——
+ * 总览的价值是导航，不应因单次接口异常而不可用。
+ */
 async function cmdBoard(client: McdClient): Promise<void> {
-  console.error('渲染主界面…');
-  console.error('（主界面为四榜导航卡片，各榜单请单独调用查看）');
-  console.error('可用命令: protein | now | sodium | mine');
+  const city = process.env.MCD_CITY ?? '上海';
+  const keyword = process.env.MCD_KEYWORD ?? '静安寺';
+  const longitude = Number(process.env.MCD_LON ?? 121.4457);
+  const latitude = Number(process.env.MCD_LAT ?? 31.2233);
+
+  console.error('渲染总览榜…');
+
+  let openStoreCount = 0;
+  let periodText = '按营业时间判定';
+
+  try {
+    const stores = await client.nearbyStores({
+      beType: 1,
+      searchType: 2,
+      city,
+      keyword,
+      longitude,
+      latitude,
+    });
+    openStoreCount = stores.filter((s) => judgeStore(s, null).isOpenNow).length;
+
+    const official = stores[0]?.reservationTimeOptions?.[0]?.reservationOptionText;
+    const period = official ? parseOfficialPeriod(official) : null;
+    if (period) periodText = `官方时段 · ${period.period} ${period.time}`;
+  } catch (err) {
+    console.error(`门店查询失败，降级为静态总览: ${(err as Error).message}`);
+  }
+
+  emit(
+    '麦麦参考榜 · 榜单总览',
+    renderOverviewBoard({
+      periodText,
+      openStoreCount,
+      storeName: process.env.MCD_STORE_NAME ?? DEFAULT_STORE.name,
+    }),
+    true,
+  );
 }
 
 function stripTags(html: string): string {
   return html.replace(/<style>[\s\S]*?<\/style>/g, '').replace(/<[^>]+>/g, ' ');
+}
+
+/**
+ * 输出模式
+ *
+ * Skill 的宿主容器宽度不可预知 —— 对话流可能只有 400px，产物面板可能有 1200px。
+ * 因此不针对「端」做分支，统一输出带 viewport 与响应式壳的完整文档：
+ *   窄容器 → 卡片吃满宽度
+ *   宽容器 → 卡片居中定宽
+ * 同一份代码在所有宿主里都成立。
+ *
+ * --fragment 用于宿主自行包裹片段的场景（仅输出样式 + 榜单，不含 html/head/body）。
+ */
+const FRAGMENT_MODE = process.argv.includes('--fragment');
+
+function emit(title: string, inner: string, wide = false): void {
+  const board = wrapBoard(inner, wide);
+  const html = FRAGMENT_MODE ? renderStyles() + board : renderDocument(title, board);
+  assertCompliance(stripTags(html), title);
+  console.log(html);
 }
 
 async function main(): Promise<void> {
@@ -212,11 +267,20 @@ async function main(): Promise<void> {
   const help = `麦麦参考榜 · 客观指标决策榜单
 
 用法：
-  npm run probe     验证 MCP 连通性
+  npm run board     总览榜（四榜导航，主界面）
   npm run protein   每百元蛋白密度榜（核心主打）
   npm run now       此刻可点榜
   npm run sodium    钠值分布榜
   npm run mine      我的常点榜
+  npm run probe     验证 MCP 连通性
+
+输出模式：
+  默认输出完整 HTML 文档（含 viewport 与响应式壳），可直接打开
+  追加 --fragment 只输出样式与榜单片段，供宿主自行包裹
+
+容器适配：
+  不针对「端」做分支。窄容器卡片吃满宽度，宽容器居中定宽，
+  同一份代码在 MCP Client 对话流、产物面板、浏览器中均成立。
 
 环境变量：
   MCP_TOKEN        必填。麦当劳 MCP Token

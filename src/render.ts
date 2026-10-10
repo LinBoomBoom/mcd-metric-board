@@ -385,9 +385,127 @@ ${expireSection}
 }
 
 /**
+ * 渲染总览榜（主界面 · 四榜导航）
+ *
+ * 栅格用 auto-fit + minmax，窄屏 1 列、宽屏 2 列，无需媒体查询。
+ */
+export interface OverviewData {
+  /** 官方时段文本，如「官方时段 · 宵夜 22:14至23:59」 */
+  periodText: string;
+  /** 附近营业中门店数 */
+  openStoreCount: number;
+  /** 默认门店名，可选 */
+  storeName?: string;
+}
+
+export function renderOverviewBoard(data: OverviewData): string {
+  const cards: Array<{
+    label: string;
+    tagCls: string;
+    title: string;
+    desc: string;
+    primary: boolean;
+  }> = [
+    {
+      label: '此刻可点',
+      tagCls: 'tag--tools',
+      title: '你现在能买到什么',
+      desc: '附近门店实时菜单交集，含售罄与打烊标记',
+      primary: false,
+    },
+    {
+      label: '核心主打',
+      tagCls: 'tag--primary',
+      title: '每百元蛋白密度榜',
+      desc: '按实付价折算，直说这一顿值不值',
+      primary: true,
+    },
+    {
+      label: '数据可视',
+      tagCls: 'tag--tools',
+      title: '钠值分布榜',
+      desc: '单色阶映射全菜单钠值分布',
+      primary: false,
+    },
+    {
+      label: '独家',
+      tagCls: 'tag--exclusive',
+      title: '我的常点榜',
+      desc: '复购频次、点单间隔、券与积分过期提醒',
+      primary: false,
+    },
+  ];
+
+  const html = cards
+    .map(
+      (c) => `
+<div class="nav-card${c.primary ? ' nav-card--primary' : ''}">
+  <div class="nav-card__top">
+    <span class="tag ${c.tagCls}">${esc(c.label)}</span>
+  </div>
+  <div class="nav-card__title">${esc(c.title)}</div>
+  <div class="nav-card__desc">${esc(c.desc)}</div>
+</div>`,
+    )
+    .join('\n');
+
+  const sub = data.storeName
+    ? `${data.storeName} · 附近 ${data.openStoreCount} 店营业中`
+    : `附近 ${data.openStoreCount} 店营业中`;
+
+  return `
+<div class="board-head">
+  <div class="board-title-row">
+    ${brandMark()}
+    <div class="board-title-block">
+      <div class="board-title">麦麦参考榜</div>
+      <div class="board-sub">${esc(sub)}</div>
+    </div>
+  </div>
+  <div class="board-status"><span class="dot"></span>${esc(data.periodText)}</div>
+</div>
+<div class="nav-grid">${html}</div>
+<div class="board-foot">
+  <div class="compliance">四个榜单均为客观数据对比，未匹配项不做推测映射 · ${COMPLIANCE_FOOTER}</div>
+</div>`;
+}
+
+/** 包裹为榜单容器；wide 用于总览榜的多卡栅格 */
+export function wrapBoard(inner: string, wide = false): string {
+  return `<div class="board${wide ? ' board--wide' : ''}">${inner}</div>`;
+}
+
+/**
+ * 包装为完整 HTML 文档
+ *
+ * 输出完整文档而非片段，原因：
+ *   宿主容器宽度不可预知（对话流窄、产物面板宽），需要 viewport 与响应式壳才能自适应。
+ *   完整文档可直接双击打开作为 H5 查看与截图，同时不影响被宿主嵌入。
+ *   需要片段时由 CLI 的 --fragment 参数输出。
+ */
+export function renderDocument(title: string, board: string): string {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<meta name="description" content="麦麦参考榜 · 基于麦当劳官方 MCP 的客观指标决策榜单。非麦当劳官方产品。">
+<title>${esc(title)}</title>
+${renderStyles()}
+</head>
+<body>
+<div class="page">
+${board}
+</div>
+</body>
+</html>`;
+}
+
+/**
  * 渲染完整样式表
  *
- * 令牌定义见 design/04-麦当劳风格设计规范.md 第 2 节
+ * 令牌定义见 DESIGN.md 第 2 节
  */
 export function renderStyles(): string {
   return `
@@ -407,10 +525,27 @@ export function renderStyles(): string {
   --page-fg:#241A14;
 }
 
-/* 页面基底：暖米白，替代冷灰 */
-body{background:var(--page-bg);color:var(--page-fg);font-family:var(--font-base);margin:0;padding:20px 12px}
-
-.board{max-width:420px;margin:0 auto;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-card);overflow:hidden}
+/* ═══════════════════════════════════════════════════════════
+   容器自适应外壳
+   宿主容器宽度不可预知（对话流可能 400px，产物面板可能 1200px），
+   因此不针对「端」做分支，统一采用「窄则吃满、宽则居中定宽」策略。
+   ═══════════════════════════════════════════════════════════ */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{margin:0;background:var(--bg-page);color:var(--page-fg);font-family:var(--font-base)}
+.page{
+  padding:20px 12px;
+  padding-left:max(12px,env(safe-area-inset-left));
+  padding-right:max(12px,env(safe-area-inset-right));
+  padding-bottom:max(20px,env(safe-area-inset-bottom));
+  display:flex;justify-content:center;align-items:flex-start;
+}
+.board{
+  width:100%;max-width:480px;
+  background:var(--bg-card);border:1px solid var(--border);
+  border-radius:var(--r-lg);box-shadow:var(--shadow-card);overflow:hidden;
+}
+/* 总览榜为多卡栅格，宽屏给更宽的上限 */
+.board--wide{max-width:760px}
 
 /* ── 头部 ── */
 .board-head{padding:16px}
@@ -486,7 +621,8 @@ body{background:var(--page-bg);color:var(--page-fg);font-family:var(--font-base)
 .empty-desc{font-size:var(--fs-md);color:var(--text-secondary);line-height:1.6;margin-bottom:20px}
 
 /* ── 主按钮：品牌红 ── */
-.btn-primary{display:block;width:100%;height:40px;border:none;border-radius:var(--r-md);background:var(--brand-red);color:#FFFFFF;font-family:inherit;font-size:var(--fs-md);font-weight:700;letter-spacing:.02em;cursor:pointer;box-shadow:0 2px 8px rgba(218,41,28,.24);transition:background .15s,box-shadow .15s,transform .15s}
+/* 高度 44px：满足移动端最小触摸目标（WCAG 2.5.5 / iOS HIG） */
+.btn-primary{display:block;width:100%;height:44px;border:none;border-radius:var(--r-md);background:var(--brand-red);color:#FFFFFF;font-family:inherit;font-size:var(--fs-md);font-weight:700;letter-spacing:.02em;cursor:pointer;box-shadow:0 2px 8px rgba(218,41,28,.24);transition:background .15s,box-shadow .15s,transform .15s}
 .btn-primary:hover{background:var(--brand-red-hover);box-shadow:0 4px 12px rgba(218,41,28,.30);transform:translateY(-1px)}
 .btn-primary:active{background:var(--brand-red-active);box-shadow:0 1px 3px rgba(218,41,28,.20);transform:translateY(0)}
 .btn-primary:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(218,41,28,.28)}
@@ -497,5 +633,26 @@ body{background:var(--page-bg);color:var(--page-fg);font-family:var(--font-base)
 .board-foot{padding:14px 16px;border-top:1px solid var(--border);background:var(--bg-sunken)}
 .compliance{font-size:var(--fs-xs);color:var(--text-tertiary);line-height:1.7}
 .board-foot .btn-primary{margin-bottom:12px}
+
+/* ── 总览榜：四榜导航栅格 ── */
+/* auto-fit + minmax：窄屏 1 列，宽屏 2 列，无需媒体查询 */
+.nav-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;padding:14px 16px}
+.nav-card{display:block;padding:13px 14px;border:1px solid var(--border);border-radius:var(--r-md);background:var(--bg-card);text-decoration:none;color:inherit;cursor:pointer;transition:border-color .15s,background .15s,transform .15s}
+.nav-card:hover{border-color:var(--border-strong);background:var(--bg-sunken);transform:translateY(-1px)}
+.nav-card:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(218,41,28,.28)}
+.nav-card--primary{border-color:#F5CFC9;background:var(--bg-brand-tint)}
+.nav-card__top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}
+.nav-card__title{font-size:var(--fs-md);font-weight:700;line-height:1.35}
+.nav-card__desc{font-size:var(--fs-sm);color:var(--text-secondary);line-height:1.55;margin-top:4px}
+.tag{font-size:var(--fs-xs);font-weight:700;padding:2px 7px;border-radius:var(--r-sm);flex-shrink:0;white-space:nowrap}
+.tag--tools{color:var(--text-tertiary);background:var(--bg-sunken)}
+.tag--primary{color:#FFFFFF;background:var(--brand-red)}
+.tag--gold{color:#241A14;background:var(--brand-gold)}
+.tag--exclusive{color:#FFFFFF;background:var(--value-green)}
+
+/* ── 空状态图形（纯 CSS，无图片请求） ── */
+.empty-icon{position:relative}
+.empty-icon::before{content:"";position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:19px;height:15px;border:2px solid var(--border-strong);border-radius:3px}
+.empty-icon::after{content:"";position:absolute;left:50%;top:calc(50% - 5px);transform:translateX(-50%);width:9px;height:2px;background:var(--brand-gold);border-radius:1px}
 </style>`;
 }
