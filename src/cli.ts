@@ -124,7 +124,11 @@ async function cmdProtein(client: McdClient): Promise<void> {
 
   console.error(`匹配 ${matchedCount}/${totalCount}，榜首密度 ${maxDensity.toFixed(1)}g/百元`);
 
-  emit('麦麦参考榜 · 每百元蛋白密度', renderProteinBoard(result));
+  const sodium = rankBySodium(nutrition);
+  emit(
+    '麦麦参考榜 · 蛋白质性价比',
+    renderProteinBoard(result, { items: sodium.items, min: sodium.min, max: sodium.max }),
+  );
 }
 
 async function cmdNow(client: McdClient): Promise<void> {
@@ -339,13 +343,18 @@ async function cmdAll(client: McdClient): Promise<void> {
     medianDensity: densities[Math.floor(densities.length / 2)] ?? 0,
     computedAt: new Date().toISOString(),
   };
-  sections.push({
-    title: '每百元蛋白密度',
-    tag: `跨菜单价格与营养表联合计算 · ${matchedCount}/${totalCount}`,
-    board: renderProteinBoard(proteinResult),
-  });
+  const sodium = rankBySodium(nutrition);
+  const valueSection: ReportSection = {
+    title: '蛋白质性价比',
+    tag: `按每 ¥1 可得蛋白质克数排序 · ${matchedCount}/${totalCount} 项有营养数据`,
+    board: renderProteinBoard(proteinResult, {
+      items: sodium.items,
+      min: sodium.min,
+      max: sodium.max,
+    }),
+  };
 
-  // ② 组合配置方案
+  // ① 组合配置方案（核心：直接给答案，排在报告最前）
   try {
     const target = findByPattern(menu, /随心配/);
     if (target) {
@@ -381,6 +390,9 @@ async function cmdAll(client: McdClient): Promise<void> {
     console.error(`拆解榜跳过：${(err as Error).message}`);
   }
 
+  // ③ 蛋白质性价比（含钠值视图 —— 钠值不再独立成榜，它属营养视角的一个切面）
+  sections.push(valueSection);
+
   // ④ 场景方案
   const scenarios = buildScenarios().map((s) => runScenario(s, menu, nutrition, 10));
   sections.push({
@@ -389,15 +401,7 @@ async function cmdAll(client: McdClient): Promise<void> {
     board: renderScenarioBoard(scenarios),
   });
 
-  // ⑤ 钠值分布
-  const sodium = rankBySodium(nutrition);
-  sections.push({
-    title: '钠值分布',
-    tag: `全菜单 ${sodium.items.length} 项`,
-    board: renderSodiumBoard({ items: sodium.items, min: sodium.min, max: sodium.max }),
-  });
-
-  // ⑥ 此刻可点
+  // ⑤ 此刻可点
   try {
     const stores = await client.nearbyStores({
       beType: 1,
@@ -454,7 +458,7 @@ async function cmdAll(client: McdClient): Promise<void> {
     ? renderStyles() + sections.map((s) => `<div class="stack__item">${s.board}</div>`).join('')
     : renderReportDocument('麦麦参考榜 · 完整报告', sections, {
         heading: '麦麦参考榜',
-        sub: '基于麦当劳官方 MCP 的客观指标决策榜单。数据全部实时拉取，未匹配项不做推测映射，个人数据仅在本机运行时计算。非麦当劳官方产品。',
+        sub: '把「这一顿怎么点最值」变成一道可求解的题。全部数据来自麦当劳官方 MCP 实时接口，未匹配项不做推测映射，个人数据仅在本机运行时计算。非麦当劳官方产品。',
       });
 
   assertCompliance(stripTags(html), '完整报告');
@@ -537,14 +541,15 @@ async function main(): Promise<void> {
   const help = `麦麦参考榜 · 客观指标决策榜单
 
 用法：
-  npm run board     总览榜（导航）
-  npm run protein   每百元蛋白密度榜
-  npm run combine   组合配置方案（随心配求解器）
-  npm run breakdown 套餐逐项拆解（盈亏平衡）
-  npm run scenario  场景方案
-  npm run now       此刻可点榜
-  npm run sodium    钠值分布榜
-  npm run mine      我的常点榜
+  npm run all       完整报告（全部榜单同页）
+  npm run board     总览榜（分层导航）
+  npm run combine   组合配置方案（核心：求解最优搭配）
+  npm run breakdown 套餐逐项拆解（单点价 vs 套餐内加价）
+  npm run protein   蛋白质性价比（含钠值视图）
+  npm run scenario  场景方案（预算内 / 多人 / 一份管饱）
+  npm run now       此刻可点
+  npm run sodium    钠值分布（独立视图）
+  npm run mine      我的常点
   npm run probe     验证 MCP 连通性
 
 输出模式：

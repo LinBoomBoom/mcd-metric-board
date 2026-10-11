@@ -105,34 +105,53 @@ function rankBadge(index: number): string {
 }
 
 /**
- * 渲染单条排名项
+ * 前三名大卡
+ *
+ * ## 单位策略（重构核心）
+ *
+ * 旧版把「171.4g 蛋白/百元」放大做主视觉，把用户实际摄入的「24.0g」塞进副文本 ——
+ * 主次颠倒，且同一行出现两个"蛋白"数字，读者无从判断哪个是自己吃到的。
+ *
+ * 新版彻底移除行内的比率：主视觉只放两个绝对值 —— **实付价** 与 **蛋白质克数**。
+ * 比率（每元蛋白克数）只在榜单表头说明一次，作为排序依据，不再出现在每一行。
  */
-function renderRankedItem(item: RankedItem, index: number, medianDensity: number): string {
-  const aboveMedian = (item.density ?? 0) >= medianDensity;
-  const valueColor = aboveMedian ? 'var(--value-green)' : 'var(--gold-deep)';
-  const density = item.density ?? 0;
-  const ratio = item.densityRatio ?? 0;
+function renderTopCard(item: RankedItem, index: number, maxDensity: number): string {
+  const preset = RANK_BADGE[index];
+  const bg = preset?.bg ?? 'var(--bg-sunken)';
+  const fg = preset?.fg ?? 'var(--text-tertiary)';
+  const ratio = maxDensity > 0 ? ((item.density ?? 0) / maxDensity) * 100 : 0;
 
-  const meta = [
-    `¥${fmt(item.price, 2)}`,
-    item.protein !== undefined ? `蛋白 ${fmt(item.protein)}g` : null,
-    item.sodium !== undefined ? `钠 ${Math.round(item.sodium)}mg` : null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  const extra: string[] = [];
+  if (item.sodium !== undefined) extra.push(`钠 ${Math.round(item.sodium)}mg`);
+  if (item.kcal !== undefined) extra.push(`能量 ${Math.round(item.kcal)}kcal`);
 
   return `
-<div class="rank-item">
-  ${rankBadge(index)}
-  <div class="rank-body">
-    <div class="rank-name">${esc(item.name)}</div>
-    <div class="rank-meta">${esc(meta)}</div>
-    <div class="data-bar"><div style="width:${fmt(Math.min(ratio, 100), 1)}%;background:${valueColor}"></div></div>
+<div class="top-card">
+  <span class="top-card__badge" style="background:${bg};color:${fg}">${index + 1}</span>
+  <div class="top-card__body">
+    <div class="top-card__name">${esc(item.name)}</div>
+    <div class="top-card__figs">
+      <span class="fig"><b>¥${fmt(item.price, 2)}</b><i>实付</i></span>
+      <span class="fig"><b>${fmt(item.protein ?? 0)}<u>g</u></b><i>蛋白质</i></span>
+    </div>
+    ${extra.length > 0 ? `<div class="top-card__extra">${esc(extra.join(' · '))}</div>` : ''}
+    <div class="top-card__bar"><i style="width:${fmt(Math.min(ratio, 100), 1)}%"></i></div>
   </div>
-  <div class="rank-value">
-    <div class="rank-num" style="color:${valueColor}">${fmt(density)}<span class="rank-unit">g</span></div>
-    <div class="rank-label">蛋白 / 百元</div>
-  </div>
+</div>`;
+}
+
+/**
+ * 第四名及以后：紧凑行
+ *
+ * 只保留决策必需的名称与两个数值，去掉数据条 ——
+ * 实测 4 名以后密度差异很小，条形长度几乎相同，不携带信息，只是视觉噪音。
+ */
+function renderCompactRow(item: RankedItem, index: number): string {
+  return `
+<div class="row">
+  <span class="row__no">${index + 1}</span>
+  <div class="row__name">${esc(item.name)}</div>
+  <div class="row__figs">¥${fmt(item.price, 2)} · 蛋白 ${fmt(item.protein ?? 0)}g</div>
 </div>`;
 }
 
@@ -153,22 +172,30 @@ function renderUnmatched(name: string, price: number): string {
  *
  * 唯一使用排名徽标的榜单 —— 排序即价值，值得庆祝。
  */
-export function renderProteinBoard(result: RankResult): string {
-  const { ranked, unmatched, coverage, medianDensity, storeName } = result;
+export function renderProteinBoard(result: RankResult, sodium?: SodiumBoardData): string {
+  const { ranked, unmatched, coverage, storeName } = result;
+  const maxDensity = ranked[0]?.density ?? 0;
 
   const head = boardHead(
-    '每百元蛋白密度',
-    `按实付价折算 · ${storeName}`,
+    '蛋白质性价比',
+    `按每 ¥1 可获得的蛋白质克数排序 · ${storeName}`,
     renderCoverage(coverage.matched, coverage.total),
   );
 
-  /** 单档列表：序号用档内排名，便于档内比较 */
-  const list = (items: RankedItem[]): string =>
-    items.length > 0
-      ? `<div class="rank-list">${items
-          .map((item, i) => renderRankedItem(item, i, medianDensity))
-          .join('')}</div>`
-      : `<div class="empty"><div class="empty-title">该档位暂无餐品</div><div class="empty-desc">换个档位或换一家门店看看</div></div>`;
+  /**
+   * 单档列表：前三名用大卡，第四名起用紧凑行
+   *
+   * 这样解决「主次看不出」—— 旧版 20 行同等权重，Top3 的徽标颜色反被后续灰块淹没。
+   * 序号用档内排名，便于档内比较。
+   */
+  const list = (items: RankedItem[]): string => {
+    if (items.length === 0) {
+      return `<div class="empty"><div class="empty-title">该档位暂无餐品</div><div class="empty-desc">换个档位或换一家门店看看</div></div>`;
+    }
+    const top = items.slice(0, 3).map((item, i) => renderTopCard(item, i, maxDensity)).join('');
+    const rest = items.slice(3).map((item, i) => renderCompactRow(item, i + 3)).join('');
+    return `<div class="top-list">${top}</div>${rest ? `<div class="row-list">${rest}</div>` : ''}`;
+  };
 
   const panels: TabPanel[] = [];
   const allShown = ranked.slice(0, ALL_TAB_CAP);
@@ -187,26 +214,29 @@ export function renderProteinBoard(result: RankResult): string {
     panels.push({ label: band.label, count: items.length, html: list(items) });
   }
 
+  // 钠值视角并入本榜 —— 它此前独立成榜属功能堆叠，且与「点餐决策」并非同一层问题
+  // 注：不标注条数。本 tab 基于全量营养表，与上方的门店在售口径不同，
+  // 并列数字（59 vs 161）会让读者误以为口径冲突。
+  if (sodium && sodium.items.length > 0) {
+    const ascending = [...sodium.items].sort((a, b) => a.sodium - b.sodium);
+    panels.push({
+      label: '钠值',
+      html:
+        `<div class="scenario-criteria">按钠含量从低到高 · 基于全量营养表 ${ascending.length} 项，显示前 ${Math.min(24, ascending.length)} 项</div>` +
+        `<div class="sodium-list">${ascending.slice(0, 24).map(sodiumRow).join('')}</div>`,
+    });
+  }
+
   const noData =
     unmatched.length > 0
       ? `
-<div class="divider"><span>暂无营养数据 · ${unmatched.length} 项</span></div>
-${unmatched.slice(0, 8).map((u) => renderUnmatched(u.name, u.price)).join('')}
+<div class="divider"><span>暂无营养数据 · ${unmatched.length} 项（不计入排序）</span></div>
+${unmatched.slice(0, 6).map((u) => renderUnmatched(u.name, u.price)).join('')}
 ${
-  unmatched.length > 8
-    ? `<div class="more-hint">另有 ${unmatched.length - 8} 项暂无营养数据</div>`
+  unmatched.length > 6
+    ? `<div class="more-hint">另有 ${unmatched.length - 6} 项暂无营养数据</div>`
     : ''
 }`
-      : '';
-
-  const empty =
-    ranked.length === 0
-      ? `
-<div class="empty">
-  <div class="empty-icon"></div>
-  <div class="empty-title">暂无可计算的数据</div>
-  <div class="empty-desc">该门店菜单与官方营养表暂无对应项<br>换一家门店或稍后再试</div>
-</div>`
       : '';
 
   const cta = ranked.length > 0 ? '<button class="btn-primary" type="button">加入购物车</button>' : '';
@@ -214,10 +244,9 @@ ${
   return `${head}
 ${renderTabs(panels)}
 ${noData}
-${empty}
 <div class="board-foot">
   ${cta}
-  <div class="compliance">${NEUTRAL_NOTE} · ${COMPLIANCE_FOOTER}</div>
+  <div class="compliance">比率为客观数据比值，仅表示蛋白质与价格的关系 · ${COMPLIANCE_FOOTER}</div>
 </div>`;
 }
 
@@ -449,57 +478,48 @@ export interface OverviewData {
 }
 
 export function renderOverviewBoard(data: OverviewData): string {
-  const cards: Array<{
-    label: string;
-    tagCls: string;
-    title: string;
-    desc: string;
-    primary: boolean;
-  }> = [
-    {
-      label: '此刻可点',
-      tagCls: 'tag--tools',
-      title: '你现在能买到什么',
-      desc: '附近门店实时菜单交集，含售罄与打烊标记',
-      primary: false,
-    },
-    {
-      label: '核心主打',
-      tagCls: 'tag--primary',
-      title: '每百元蛋白密度榜',
-      desc: '按实付价折算，直说这一顿值不值',
-      primary: true,
-    },
-    {
-      label: '数据可视',
-      tagCls: 'tag--tools',
-      title: '钠值分布榜',
-      desc: '单色阶映射全菜单钠值分布',
-      primary: false,
-    },
-    {
-      label: '独家',
-      tagCls: 'tag--exclusive',
-      title: '我的常点榜',
-      desc: '复购频次、点单间隔、券与积分过期提醒',
-      primary: false,
-    },
+  /**
+   * 分层依据
+   *
+   * 旧版把 4 个榜平铺成同权重卡片 —— 用户看不出哪个是核心，这是「主题分不清」的直接原因。
+   * 新版按职责分三层：**核心**（直接给答案）→ **支撑视角**（解释答案怎么来的）→ **上下文**（决策前提）。
+   */
+  const coreCard = `
+<div class="nav-card nav-card--core">
+  <div class="nav-card__top"><span class="tag tag--primary">核心</span></div>
+  <div class="nav-card__title">组合配置方案</div>
+  <div class="nav-card__desc">枚举套餐的全部搭配，按目标直接求解最优组合</div>
+</div>`;
+
+  const support = [
+    { title: '套餐逐项拆解', desc: '每项单点价 vs 套餐内加价' },
+    { title: '蛋白质性价比', desc: '按每 ¥1 可得蛋白质克数排序' },
+    { title: '场景方案', desc: '预算内 / 多人分享 / 一份管饱' },
   ];
 
-  const html = cards
+  const context = [
+    { title: '此刻可点', desc: '哪些门店现在营业' },
+    { title: '我的常点', desc: '复购频次与券积分到期' },
+  ];
+
+  const renderGroup = (
+    label: string,
+    cards: Array<{ title: string; desc: string }>,
+  ): string => `
+<div class="nav-group">
+  <div class="nav-group__label">${esc(label)}</div>
+  <div class="nav-grid">${cards
     .map(
       (c) => `
-<div class="nav-card${c.primary ? ' nav-card--primary' : ''}">
-  <div class="nav-card__top">
-    <span class="tag ${c.tagCls}">${esc(c.label)}</span>
-  </div>
+<div class="nav-card">
   <div class="nav-card__title">${esc(c.title)}</div>
   <div class="nav-card__desc">${esc(c.desc)}</div>
 </div>`,
     )
-    .join('\n');
+    .join('')}</div>
+</div>`;
 
-  const sub = data.storeName
+  const status = data.storeName
     ? `${data.storeName} · 附近 ${data.openStoreCount} 店营业中`
     : `附近 ${data.openStoreCount} 店营业中`;
 
@@ -509,14 +529,19 @@ export function renderOverviewBoard(data: OverviewData): string {
     ${brandMark()}
     <div class="board-title-block">
       <div class="board-title">麦麦参考榜</div>
-      <div class="board-sub">${esc(sub)}</div>
+      <div class="board-sub">把「这一顿怎么点最值」变成一道可求解的题</div>
     </div>
   </div>
-  <div class="board-status"><span class="dot"></span>${esc(data.periodText)}</div>
+  <div class="board-status"><span class="dot"></span>${esc(data.periodText)} · ${esc(status)}</div>
 </div>
-<div class="nav-grid">${html}</div>
+<div class="nav-group">
+  <div class="nav-group__label">核心 · 直接给答案</div>
+  ${coreCard}
+</div>
+${renderGroup('支撑视角 · 解释答案怎么来的', support)}
+${renderGroup('决策上下文 · 前提条件', context)}
 <div class="board-foot">
-  <div class="compliance">四个榜单均为客观数据对比，未匹配项不做推测映射 · ${COMPLIANCE_FOOTER}</div>
+  <div class="compliance">全部榜单均为客观数据对比，未匹配项不做推测映射 · ${COMPLIANCE_FOOTER}</div>
 </div>`;
 }
 
@@ -612,25 +637,68 @@ const ALL_TAB_CAP = 20;
 export function renderCombineBoard(result: SolveResult): string {
   const { roundsSummary } = result;
 
-  const coverageNote = `
-<div class="note">
-  <div class="note__row"><span>理论组合</span><strong>${result.totalCombos}</strong></div>
-  <div class="note__row"><span>可完整比价</span><strong>${result.comparableCombos}</strong></div>
-  <div class="note__row"><span>有营养数据</span><strong>${result.nutritionCombos}</strong></div>
-  <div class="note__text">套餐内小食与饮品多数不单独售卖，因此无法取得单点价；未取得的一律不计入比价，不按同类项估算。</div>
-</div>`;
-
-  const roundChips = roundsSummary
-    .map(
-      (r) =>
-        `<div class="chip-row"><span class="chip-row__name">${esc(r.name)}</span><span class="chip-row__val">${r.choiceCount} 选 1 · 可定价 ${r.pricedCount} · 有营养 ${r.nutritionCount}</span></div>`,
-    )
-    .join('');
+  /**
+   * 依据块
+   *
+   * 旧版把这三项工程指标放在**答案之前**，用户要先读三行统计才看得到结论 ——
+   * 顺序完全颠倒。现改为 <details> 折叠置于答案之后：
+   * 关心的人可以展开核验，不关心的人一眼看到答案。
+   */
+  const basis = `
+<details class="basis">
+  <summary>数据依据与覆盖率</summary>
+  <div class="basis__body">
+    <div class="basis__row"><span>理论组合总数</span><b>${result.totalCombos}</b></div>
+    <div class="basis__row"><span>可完整比价</span><b>${result.comparableCombos}</b></div>
+    <div class="basis__row"><span>有营养数据</span><b>${result.nutritionCombos}</b></div>
+    ${roundsSummary
+      .map(
+        (r) =>
+          `<div class="basis__row"><span>${esc(r.name)}</span><b>${r.choiceCount} 选 1</b></div>`,
+      )
+      .join('')}
+    <div class="basis__text">套餐内小食与饮品多数不单独售卖，无法取得单点价；未取得的一律不计入比价，不按同类项估算。营养数据缺失的组合不参与蛋白密度排序。</div>
+  </div>
+</details>`;
 
   const renderPick = (p: ComboPick | null, objective: string): string => {
     if (!p) {
       return `<div class="empty"><div class="empty-title">该目标暂无可计算组合</div><div class="empty-desc">受可定价项覆盖限制，换其他目标看看</div></div>`;
     }
+
+    // ── 答案卡：先给结论 ──
+    const figs: string[] = [
+      `<span class="answer__fig"><b>¥${p.totalPrice.toFixed(2)}</b><i>实付</i></span>`,
+    ];
+    if (p.protein !== null) {
+      figs.push(
+        `<span class="answer__fig"><b>${p.protein.toFixed(0)}<u>g</u></b><i>蛋白质</i></span>`,
+      );
+    }
+    if (p.saved !== null && p.saved > 0) {
+      figs.push(
+        `<span class="answer__fig answer__fig--good"><b>省 ¥${p.saved.toFixed(1)}</b><i>相对单点</i></span>`,
+      );
+    }
+
+    // 单位统一为「克 / 元」—— 比「克 / 百元」直观，¥1 能买到多少克蛋白
+    const perYuan =
+      p.protein !== null && p.totalPrice > 0 ? p.protein / p.totalPrice : null;
+    const note =
+      perYuan !== null
+        ? `每 ¥1 可得 ${perYuan.toFixed(2)}g 蛋白质${
+            p.singleSum !== null ? ` · 单点合计需 ¥${p.singleSum.toFixed(2)}` : ''
+          }`
+        : '';
+
+    const answer = `
+<div class="answer">
+  <div class="answer__label">${esc(objective)}</div>
+  <div class="answer__figs">${figs.join('')}</div>
+  ${note ? `<div class="answer__note">${esc(note)}</div>` : ''}
+</div>`;
+
+    // ── 明细：再给依据 ──
     const items = p.items
       .map(
         (it) => `
@@ -648,34 +716,11 @@ export function renderCombineBoard(result: SolveResult): string {
       )
       .join('');
 
-    const stats: string[] = [];
-    stats.push(
-      `<div class="stat"><div class="stat__v">¥${p.totalPrice.toFixed(1)}</div><div class="stat__k">套餐实付</div></div>`,
-    );
-    if (p.singleSum !== null) {
-      stats.push(
-        `<div class="stat"><div class="stat__v stat__v--strike">¥${p.singleSum.toFixed(1)}</div><div class="stat__k">单点合计</div></div>`,
-      );
-    }
-    if (p.saved !== null) {
-      stats.push(
-        `<div class="stat"><div class="stat__v stat__v--good">省 ¥${p.saved.toFixed(1)}</div><div class="stat__k">相对单点</div></div>`,
-      );
-    }
-    if (p.density !== null) {
-      stats.push(
-        `<div class="stat"><div class="stat__v">${p.density.toFixed(1)}g</div><div class="stat__k">蛋白 / 百元</div></div>`,
-      );
-    }
-
-    return `
-<div class="objective">${esc(objective)}</div>
-<div class="pick">${items}</div>
-<div class="stats">${stats.join('')}</div>`;
+    return `${answer}<div class="pick-label">这份方案包含</div><div class="pick">${items}</div>`;
   };
 
   const panels: TabPanel[] = [
-    { label: '密度最优', html: renderPick(result.bestByDensity, '蛋白密度最高') },
+    { label: '每元最优', html: renderPick(result.bestByDensity, '每 ¥1 获得的蛋白质最多') },
     { label: '省最多', html: renderPick(result.bestBySaving, '相对单点省得最多') },
     { label: '蛋白最高', html: renderPick(result.bestByProtein, '蛋白质合计最高') },
     { label: '不加价', html: renderPick(result.bestNoSurcharge, '不超基础价的前提下最优') },
@@ -687,16 +732,14 @@ export function renderCombineBoard(result: SolveResult): string {
     ${brandMark()}
     <div class="board-title-block">
       <div class="board-title">组合配置方案</div>
-      <div class="board-sub">${esc(result.comboName)} · 基础价 ¥${result.basePrice.toFixed(1)}${
-        result.originalPrice !== null ? ` · 官方标注原价 ¥${result.originalPrice.toFixed(1)}` : ''
-      }</div>
+      <div class="board-sub">${esc(result.comboName)} · ¥${result.basePrice.toFixed(1)} 自选组合</div>
     </div>
   </div>
-</div>
-${coverageNote}
-<div class="chip-list">${roundChips}</div>`;
+</div>`;
 
-  return `${head}${renderTabs(panels)}
+  return `${head}
+${renderTabs(panels)}
+${basis}
 <div class="board-foot">
   <div class="compliance">组合与价格均为官方 MCP 实时数据计算结果 · ${COMPLIANCE_FOOTER}</div>
 </div>`;
@@ -777,29 +820,25 @@ ${highlight}
  */
 export function renderScenarioBoard(results: ScenarioResult[]): string {
   const panels: TabPanel[] = results.map((r) => {
-    const rows = r.hits
-      .map((h, i) => {
-        const num = h.density !== null ? `${h.density.toFixed(1)}g` : '—';
-        return `
-<div class="rank-item">
-  ${rankBadge(i)}
-  <div class="rank-body">
-    <div class="rank-name">${esc(h.name)}</div>
-    <div class="rank-meta">¥${h.price.toFixed(1)}${
-      h.protein !== null ? ` · 蛋白 ${h.protein.toFixed(0)}g` : ' · 暂无营养数据'
-    }${h.sodium !== null ? ` · 钠 ${Math.round(h.sodium)}mg` : ''}</div>
-  </div>
-  <div class="rank-value">
-    <div class="rank-num">${num}</div>
-    <div class="rank-label">蛋白 / 百元</div>
-  </div>
-</div>`;
-      })
-      .join('');
+    const maxDensity = Math.max(...r.hits.map((h) => h.density ?? 0), 0);
+
+    // 与性价比榜共用同一套渲染：前三名大卡 + 紧凑行，单位统一为绝对值（¥ 与 g）
+    const items: RankedItem[] = r.hits.map((h) => ({
+      code: '',
+      name: h.name,
+      price: h.price,
+      protein: h.protein ?? undefined,
+      sodium: h.sodium ?? undefined,
+      density: h.density ?? undefined,
+    }));
+
+    const top = items.slice(0, 3).map((it, i) => renderTopCard(it, i, maxDensity)).join('');
+    const rest = items.slice(3).map((it, i) => renderCompactRow(it, i + 3)).join('');
+    const rows = `<div class="top-list">${top}</div>${rest ? `<div class="row-list">${rest}</div>` : ''}`;
 
     const body =
       r.hits.length > 0
-        ? `<div class="scenario-criteria">筛选条件 · ${esc(r.scenario.criteria)} · 命中 ${r.totalMatched} 项，显示前 ${r.hits.length}</div><div class="rank-list">${rows}</div>`
+        ? `<div class="scenario-criteria">筛选条件 · ${esc(r.scenario.criteria)} · 命中 ${r.totalMatched} 项，显示前 ${r.hits.length}</div>${rows}`
         : `<div class="empty"><div class="empty-title">该场景暂无命中</div><div class="empty-desc">换一个场景或换一家门店看看</div></div>`;
 
     return { label: r.scenario.title, count: r.totalMatched, html: body };
@@ -1022,7 +1061,7 @@ body{margin:0;background:var(--bg-page);color:var(--page-fg);font-family:var(--f
 .coverage{padding:12px 16px;border-top:1px solid var(--border);margin:14px -16px -16px;background:var(--bg-brand-tint)}
 .coverage-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
 .coverage-text{font-size:var(--fs-sm);color:var(--text-secondary)}
-.coverage-text strong{font-size:var(--fs-lg);font-weight:700;color:var(--brand-red)}
+.coverage-text strong{font-size:var(--fs-lg);font-weight:700;color:var(--text-primary)}
 .coverage-pct{font-size:var(--fs-sm);font-weight:500;color:var(--text-secondary)}
 .coverage-bar{height:4px;border-radius:var(--r-pill);background:#F2E0D8;overflow:hidden;margin-top:8px}
 .coverage-bar div{height:100%;border-radius:var(--r-pill);background:var(--brand-red)}
@@ -1043,6 +1082,55 @@ body{margin:0;background:var(--bg-page);color:var(--page-fg);font-family:var(--f
 .rank-num{font-size:var(--fs-lg);font-weight:700;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
 .rank-unit{font-size:var(--fs-sm);font-weight:500;margin-left:1px}
 .rank-label{font-size:var(--fs-xs);color:var(--text-tertiary);margin-top:2px}
+
+/* ── 蛋白质性价比：前三名大卡 ── */
+/* 主视觉只放两个绝对值（实付价 / 蛋白质克数），比率不进列表 */
+.top-list{border-top:1px solid var(--border)}
+.top-card{display:flex;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border)}
+.top-card__badge{width:24px;height:24px;border-radius:7px;font-size:var(--fs-sm);font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.top-card__body{flex:1;min-width:0}
+.top-card__name{font-size:var(--fs-lg);font-weight:700;letter-spacing:-.01em;line-height:1.3}
+.top-card__figs{display:flex;gap:20px;margin-top:9px}
+.fig{display:flex;flex-direction:column;gap:2px}
+.fig b{font-size:var(--fs-xl);font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1}
+.fig b u{font-size:var(--fs-sm);font-weight:500;text-decoration:none;margin-left:1px}
+.fig i{font-size:var(--fs-xs);color:var(--text-tertiary);font-style:normal}
+.top-card__extra{font-size:var(--fs-xs);color:var(--text-tertiary);margin-top:8px}
+.top-card__bar{height:5px;border-radius:var(--r-pill);background:var(--bg-sunken);margin-top:10px;overflow:hidden}
+.top-card__bar i{display:block;height:100%;border-radius:var(--r-pill);background:var(--gold-deep)}
+
+/* ── 蛋白质性价比：第四名起紧凑行 ── */
+/* 4 名以后密度差异很小，条形长度几乎相同、不携带信息，故去掉 */
+.row-list{border-top:1px solid var(--border)}
+.row{display:flex;align-items:baseline;gap:10px;padding:10px 16px;border-bottom:1px solid var(--border)}
+.row:last-child{border-bottom:none}
+.row__no{font-size:var(--fs-sm);color:var(--text-tertiary);width:16px;flex-shrink:0;font-variant-numeric:tabular-nums}
+.row__name{flex:1;min-width:0;font-size:var(--fs-md);color:var(--text-primary);line-height:1.4}
+.row__figs{font-size:var(--fs-sm);color:var(--text-secondary);flex-shrink:0;font-variant-numeric:tabular-nums}
+
+/* ── 组合榜：答案卡 ── */
+.answer{margin:12px 16px;padding:14px 16px;border-radius:var(--r-md);background:var(--bg-brand-tint);border:1px solid #F5CFC9}
+.answer__label{font-size:var(--fs-xs);color:var(--brand-red);font-weight:700;letter-spacing:.02em}
+.answer__figs{display:flex;gap:22px;margin-top:10px}
+.answer__fig{display:flex;flex-direction:column;gap:3px}
+.answer__fig b{font-size:var(--fs-2xl);font-weight:700;letter-spacing:-.03em;font-variant-numeric:tabular-nums;line-height:1.05}
+.answer__fig b u{font-size:var(--fs-md);font-weight:500;text-decoration:none;margin-left:1px}
+.answer__fig i{font-size:var(--fs-xs);color:var(--text-secondary);font-style:normal}
+.answer__fig--good b{color:var(--value-green)}
+.answer__note{font-size:var(--fs-xs);color:var(--text-secondary);margin-top:10px;padding-top:10px;border-top:1px solid #F0DAD4}
+.pick-label{padding:12px 16px 2px;font-size:var(--fs-xs);color:var(--text-tertiary);letter-spacing:.02em}
+
+/* ── 依据折叠块 ── */
+.basis{border-top:1px solid var(--border)}
+.basis>summary{padding:12px 16px;font-size:var(--fs-sm);color:var(--text-secondary);cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between}
+.basis>summary::-webkit-details-marker{display:none}
+.basis>summary::after{content:"+";font-size:var(--fs-lg);color:var(--text-tertiary);line-height:1}
+.basis[open]>summary::after{content:"−"}
+.basis>summary:hover{color:var(--text-primary)}
+.basis__body{padding:0 16px 14px;background:var(--bg-sunken);margin:0 16px 14px;border-radius:var(--r-md);padding-top:12px}
+.basis__row{display:flex;justify-content:space-between;font-size:var(--fs-sm);color:var(--text-secondary);line-height:1.95}
+.basis__row b{color:var(--text-primary);font-weight:500;font-variant-numeric:tabular-nums}
+.basis__text{font-size:var(--fs-xs);color:var(--text-tertiary);line-height:1.65;margin-top:8px}
 
 /* ── 无数据分组 ── */
 .divider{padding:8px 16px;font-size:var(--fs-xs);color:var(--text-tertiary);background:var(--bg-sunken);border-top:1px solid var(--border)}
@@ -1095,21 +1183,21 @@ body{margin:0;background:var(--bg-page);color:var(--page-fg);font-family:var(--f
 .compliance{font-size:var(--fs-xs);color:var(--text-tertiary);line-height:1.7}
 .board-foot .btn-primary{margin-bottom:12px}
 
-/* ── 总览榜：四榜导航栅格 ── */
-/* auto-fit + minmax：窄屏 1 列，宽屏 2 列，无需媒体查询 */
-.nav-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;padding:14px 16px}
-.nav-card{display:block;padding:13px 14px;border:1px solid var(--border);border-radius:var(--r-md);background:var(--bg-card);text-decoration:none;color:inherit;cursor:pointer;transition:border-color .15s,background .15s,transform .15s}
-.nav-card:hover{border-color:var(--border-strong);background:var(--bg-sunken);transform:translateY(-1px)}
-.nav-card:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(218,41,28,.28)}
-.nav-card--primary{border-color:#F5CFC9;background:var(--bg-brand-tint)}
-.nav-card__top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}
+/* ── 总览榜：分层导航 ── */
+.nav-group{padding:14px 16px 0}
+.nav-group:last-of-type{padding-bottom:14px}
+.nav-group__label{font-size:var(--fs-xs);color:var(--text-tertiary);letter-spacing:.04em;margin-bottom:9px}
+.nav-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
+.nav-card{display:block;padding:13px 14px;border:1px solid var(--border);border-radius:var(--r-md);background:var(--bg-card)}
+.nav-card__top{display:flex;align-items:center;gap:8px;margin-bottom:9px}
 .nav-card__title{font-size:var(--fs-md);font-weight:700;line-height:1.35}
 .nav-card__desc{font-size:var(--fs-sm);color:var(--text-secondary);line-height:1.55;margin-top:4px}
-.tag{font-size:var(--fs-xs);font-weight:700;padding:2px 7px;border-radius:var(--r-sm);flex-shrink:0;white-space:nowrap}
-.tag--tools{color:var(--text-tertiary);background:var(--bg-sunken)}
+/* 核心卡：唯一的强调项，加大尺寸与强调描边 */
+.nav-card--core{padding:16px;border:1.5px solid #F0C4BC;background:var(--bg-brand-tint)}
+.nav-card--core .nav-card__title{font-size:var(--fs-xl)}
+.nav-card--core .nav-card__desc{font-size:var(--fs-md)}
+.tag{font-size:var(--fs-xs);font-weight:700;padding:2px 8px;border-radius:var(--r-sm);display:inline-block}
 .tag--primary{color:#FFFFFF;background:var(--brand-red)}
-.tag--gold{color:#241A14;background:var(--brand-gold)}
-.tag--exclusive{color:#FFFFFF;background:var(--value-green)}
 
 /* ── 空状态图形（纯 CSS，无图片请求） ── */
 .empty-icon{position:relative}
@@ -1134,7 +1222,7 @@ body{margin:0;background:var(--bg-page);color:var(--page-fg);font-family:var(--f
 /* ── 说明块 ── */
 .note{padding:12px 16px;background:var(--bg-brand-tint);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
 .note__row{display:flex;justify-content:space-between;font-size:var(--fs-sm);color:var(--text-secondary);line-height:1.9}
-.note__row strong{color:var(--brand-red);font-weight:700}
+.note__row strong{color:var(--text-primary);font-weight:500;font-variant-numeric:tabular-nums}
 .note__text{font-size:var(--fs-xs);color:var(--text-tertiary);line-height:1.65;margin-top:6px}
 .note__text strong{color:var(--text-secondary)}
 
