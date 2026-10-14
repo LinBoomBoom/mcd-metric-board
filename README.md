@@ -314,6 +314,20 @@ node dist/cli.js protein --fragment
 
 ---
 
+## 仓库文件说明
+
+| 文件 | 内容 |
+|---|---|
+| `README.md` | 项目介绍、安装方法、使用示例、目标用户 |
+| `CONTEST_DECLARATION.md` | 参赛声明（原创性、合规性、敏感信息） |
+| `MCP_INTEGRATION.md` | 实际使用的 MCP Server、Tool、调用流程与业务价值 |
+| `mcp-config.example.json` | 脱敏后的 MCP 配置示例，仅含环境变量占位符 |
+| `workbuddy.md` | WorkBuddy 对话上下文（本项目由 WorkBuddy 会话驱动开发） |
+| `DESIGN.md` | 设计规范，含设计令牌与合规边界 |
+| `src/` | 源码，7 个模块 |
+
+---
+
 ## 许可
 
 MIT License
