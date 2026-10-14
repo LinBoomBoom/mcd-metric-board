@@ -305,7 +305,7 @@ export function renderNowBoard(stores: StoreAvailability[], periodText: string):
   return `${head}
 <div class="store-list">${items}</div>
 <div class="board-foot">
-  <div class="compliance">营业时间与时段划分均取自官方 MCP 数据 · 供应状态以实时结果为准 · ${COMPLIANCE_FOOTER}</div>
+  <div class="compliance">供应状态以接口实时结果为准 · ${COMPLIANCE_FOOTER}</div>
 </div>`;
 }
 
@@ -677,7 +677,7 @@ export function renderCombineBoard(result: SolveResult): string {
     }
     if (p.saved !== null && p.saved > 0) {
       figs.push(
-        `<span class="answer__fig answer__fig--good"><b>省 ¥${p.saved.toFixed(1)}</b><i>相对单点</i></span>`,
+        `<span class="answer__fig answer__fig--good"><b>省 ¥${p.saved.toFixed(2)}</b><i>相对单点</i></span>`,
       );
     }
 
@@ -707,9 +707,9 @@ export function renderCombineBoard(result: SolveResult): string {
     <div class="pick-item__name">${esc(it.name)}</div>
     <div class="pick-item__meta">${esc(it.roundName)}${
       it.diffPrice !== 0
-        ? ` · 套餐内${it.diffPrice > 0 ? '加' : '减'} ¥${Math.abs(it.diffPrice).toFixed(1)}`
+        ? ` · 套餐内${it.diffPrice > 0 ? '加' : '减'} ¥${Math.abs(it.diffPrice).toFixed(2)}`
         : ' · 不加价'
-    }${it.singlePrice !== null ? ` · 单点 ¥${it.singlePrice.toFixed(1)}` : ' · 未单独售卖'}</div>
+    }${it.singlePrice !== null ? ` · 单点 ¥${it.singlePrice.toFixed(2)}` : ' · 未单独售卖'}</div>
   </div>
   ${it.protein !== null ? `<span class="pick-item__p">${it.protein.toFixed(0)}g</span>` : ''}
 </div>`,
@@ -732,7 +732,7 @@ export function renderCombineBoard(result: SolveResult): string {
     ${brandMark()}
     <div class="board-title-block">
       <div class="board-title">组合配置方案</div>
-      <div class="board-sub">${esc(result.comboName)} · ¥${result.basePrice.toFixed(1)} 自选组合</div>
+      <div class="board-sub">${esc(result.comboName)} · ¥${result.basePrice.toFixed(2)} 自选组合</div>
     </div>
   </div>
 </div>`;
@@ -741,7 +741,7 @@ export function renderCombineBoard(result: SolveResult): string {
 ${renderTabs(panels)}
 ${basis}
 <div class="board-foot">
-  <div class="compliance">组合与价格均为官方 MCP 实时数据计算结果 · ${COMPLIANCE_FOOTER}</div>
+  <div class="compliance">组合与价格均为实时计算结果 · ${COMPLIANCE_FOOTER}</div>
 </div>`;
 }
 
@@ -752,21 +752,30 @@ export function renderBreakdownBoard(result: BreakdownResult): string {
   const rows = result.items
     .map((it) => {
       const isPriced = it.singlePrice !== null;
+      // 主食档的档名与餐品名相同，直接输出会与标题重复成两行一样的字
+      const metaParts: string[] = [];
+      if (it.roundName && it.roundName !== it.name) metaParts.push(it.roundName);
+      if (it.protein !== null) metaParts.push(`蛋白 ${it.protein.toFixed(0)}g`);
+      const meta = metaParts.join(' · ');
+      const diff =
+        it.diffPrice > 0
+          ? `+¥${it.diffPrice.toFixed(2)}`
+          : it.diffPrice < 0
+            ? `−¥${Math.abs(it.diffPrice).toFixed(2)}`
+            : '不加价';
       return `
 <div class="bd-item${isPriced ? '' : ' bd-item--dim'}">
   <div class="bd-body">
     <div class="bd-name">${esc(it.name)}</div>
-    <div class="bd-meta">${esc(it.roundName)}${
-      it.protein !== null ? ` · 蛋白 ${it.protein.toFixed(0)}g` : ''
-    }</div>
+    ${meta ? `<div class="bd-meta">${esc(meta)}</div>` : ''}
   </div>
   <div class="bd-right">
     ${
       isPriced
-        ? `<div class="bd-single">单点 ¥${it.singlePrice!.toFixed(1)}</div>
-           <div class="bd-diff">套餐内 ${it.diffPrice > 0 ? `+¥${it.diffPrice.toFixed(1)}` : it.diffPrice < 0 ? `−¥${Math.abs(it.diffPrice).toFixed(1)}` : '不加价'}</div>`
+        ? `<div class="bd-single">单点 ¥${it.singlePrice!.toFixed(2)}</div>
+           <div class="bd-diff">套餐内 ${diff}</div>`
         : `<div class="bd-single bd-single--na">未单独售卖</div>
-           <div class="bd-diff">套餐内 ${it.diffPrice > 0 ? `+¥${it.diffPrice.toFixed(1)}` : it.diffPrice < 0 ? `−¥${Math.abs(it.diffPrice).toFixed(1)}` : '不加价'}</div>`
+           <div class="bd-diff">套餐内 ${diff}</div>`
     }
   </div>
 </div>`;
@@ -780,14 +789,14 @@ export function renderBreakdownBoard(result: BreakdownResult): string {
     best && best.value !== null
       ? `
 <div class="note">
-  <div class="note__text">这组里单点价最高的搭配：<strong>${esc(best.name)}</strong> —— 单点 ¥${best.singlePrice!.toFixed(1)}${
+  <div class="note__text">这组里单点价最高的搭配：<strong>${esc(best.name)}</strong> —— 单点 ¥${best.singlePrice!.toFixed(2)}${
     best.diffPrice > 0
-      ? `，套餐内加 ¥${best.diffPrice.toFixed(1)} 即可拿到`
+      ? `，套餐内加 ¥${best.diffPrice.toFixed(2)} 即可拿到`
       : best.diffPrice < 0
-        ? `，套餐内还减 ¥${Math.abs(best.diffPrice).toFixed(1)}`
+        ? `，套餐内还减 ¥${Math.abs(best.diffPrice).toFixed(2)}`
         : '，套餐内不加价'
-  }。套餐基础价 ¥${result.basePrice.toFixed(1)}${
-    result.originalPrice !== null ? `，官方标注原价 ¥${result.originalPrice.toFixed(1)}` : ''
+  }。套餐基础价 ¥${result.basePrice.toFixed(2)}${
+    result.originalPrice !== null ? `，官方标注原价 ¥${result.originalPrice.toFixed(2)}` : ''
   }。</div>
 </div>`
       : '';
@@ -798,7 +807,7 @@ export function renderBreakdownBoard(result: BreakdownResult): string {
     ${brandMark()}
     <div class="board-title-block">
       <div class="board-title">套餐逐项拆解</div>
-      <div class="board-sub">${esc(result.comboName)} · 基础价 ¥${result.basePrice.toFixed(1)}</div>
+      <div class="board-sub">${esc(result.comboName)} · 基础价 ¥${result.basePrice.toFixed(2)}</div>
     </div>
   </div>
 </div>
@@ -809,7 +818,7 @@ export function renderBreakdownBoard(result: BreakdownResult): string {
 ${highlight}
 <div class="bd-list">${rows}</div>
 <div class="board-foot">
-  <div class="compliance">价格均取自官方 MCP 实时菜单，未按同类项估算 · ${COMPLIANCE_FOOTER}</div>
+  <div class="compliance">价格未按同类项估算 · ${COMPLIANCE_FOOTER}</div>
 </div>`;
 }
 
@@ -965,16 +974,25 @@ const TAB_SCRIPT = `<script>
     var panels = [].slice.call(wrap.querySelectorAll('.tabs__panel'));
     if(!panels.length) return;
 
+    var radios = [].slice.call(tabs.querySelectorAll('.tabs__radio'));
     function active(){
-      for(var i=0;i<panels.length;i++){
-        if(getComputedStyle(panels[i]).visibility === 'visible') return panels[i];
+      // 以选中项为准（确定性），不依赖 getComputedStyle 的可见性推断
+      for(var i=0;i<radios.length;i++){
+        if(radios[i].checked) return panels[i];
       }
       return panels[0];
     }
     function measure(){
       var p = active();
       if(!p) return;
-      wrap.style.height = p.offsetHeight + 'px';
+      // 同时取 offsetHeight 与 scrollHeight。
+      // 容器一旦锁定高度，grid 行高就被约束，此后仅读 offsetHeight 拿到的是
+      // 「被裁剪后」的值，导致高度只能单调收缩、内容被永久裁掉。
+      // scrollHeight 反映真实内容高度，可让容器在内容变高时正确回弹。
+      var h = Math.max(p.offsetHeight, p.scrollHeight) + 'px';
+      // 高度未变化则不写回。否则「写高度 → 触发观测回调 → 再测量」会自激。
+      if(wrap.style.height === h) return;
+      wrap.style.height = h;
     }
     function enable(){
       tabs.classList.add('tabs--anim');
@@ -991,6 +1009,11 @@ const TAB_SCRIPT = `<script>
     // 首屏测量：等字体与布局稳定后再锁高
     if(document.readyState === 'complete') enable();
     else window.addEventListener('load', enable);
+
+    // 字体加载完成后字宽变化会改变换行高度，需再测一次
+    if(document.fonts && document.fonts.ready){
+      document.fonts.ready.then(function(){ measure(); });
+    }
 
     if(window.ResizeObserver){
       var ro = new ResizeObserver(function(){ measure(); });
@@ -1064,7 +1087,7 @@ body{margin:0;background:var(--bg-page);color:var(--page-fg);font-family:var(--f
 .coverage-text strong{font-size:var(--fs-lg);font-weight:700;color:var(--text-primary)}
 .coverage-pct{font-size:var(--fs-sm);font-weight:500;color:var(--text-secondary)}
 .coverage-bar{height:4px;border-radius:var(--r-pill);background:#F2E0D8;overflow:hidden;margin-top:8px}
-.coverage-bar div{height:100%;border-radius:var(--r-pill);background:var(--brand-red)}
+.coverage-bar div{height:100%;border-radius:var(--r-pill);background:var(--gold-deep)}
 .coverage-note{font-size:var(--fs-xs);color:var(--text-tertiary);line-height:1.6;margin-top:8px}
 
 /* ── 排名列表 ── */
@@ -1185,7 +1208,10 @@ body{margin:0;background:var(--bg-page);color:var(--page-fg);font-family:var(--f
 
 /* ── 总览榜：分层导航 ── */
 .nav-group{padding:14px 16px 0}
-.nav-group:last-of-type{padding-bottom:14px}
+/* 末组与底部声明之间留出间距。
+   不能用 :last-of-type —— 同级最后一个 div 是 .board-foot 而非 .nav-group，
+   该规则永不命中，最后一组的底部内边距会一直是 0。 */
+.nav-group + .board-foot{margin-top:14px}
 .nav-group__label{font-size:var(--fs-xs);color:var(--text-tertiary);letter-spacing:.04em;margin-bottom:9px}
 .nav-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
 .nav-card{display:block;padding:13px 14px;border:1px solid var(--border);border-radius:var(--r-md);background:var(--bg-card)}
@@ -1238,7 +1264,7 @@ body{margin:0;background:var(--bg-page);color:var(--page-fg);font-family:var(--f
 .pick-item__body{flex:1;min-width:0}
 .pick-item__name{font-size:var(--fs-md);font-weight:500;line-height:1.4}
 .pick-item__meta{font-size:var(--fs-xs);color:var(--text-tertiary);margin-top:3px}
-.pick-item__p{font-size:var(--fs-sm);font-weight:700;color:var(--value-green);flex-shrink:0}
+.pick-item__p{font-size:var(--fs-sm);font-weight:700;color:var(--text-primary);flex-shrink:0}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px;padding:12px 16px 16px}
 .stat{background:var(--bg-sunken);border-radius:var(--r-md);padding:10px 11px}
 .stat__v{font-size:var(--fs-lg);font-weight:700;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
@@ -1257,7 +1283,7 @@ body{margin:0;background:var(--bg-page);color:var(--page-fg);font-family:var(--f
 .bd-right{text-align:right;flex-shrink:0}
 .bd-single{font-size:var(--fs-sm);font-weight:500;color:var(--text-secondary);font-variant-numeric:tabular-nums}
 .bd-single--na{color:var(--text-tertiary);font-weight:400}
-.bd-diff{font-size:10px;color:var(--brand-red);margin-top:2px;font-weight:500}
+.bd-diff{font-size:10px;color:var(--gold-deep);margin-top:2px;font-weight:500}
 .bd-item--dim .bd-diff{color:var(--text-tertiary);font-weight:400}
 
 /* ── 场景 ── */
